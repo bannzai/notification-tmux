@@ -13,7 +13,8 @@ struct NTMUXApp: App {
     }
 
     var body: some Scene {
-        WindowGroup {
+        // WindowGroup だと URL イベントごとに新規ウィンドウが開くため、単一ウィンドウの Window シーンにする
+        Window("NTMUX", id: "main") {
             if isRunningTests {
                 Text("Running tests")
             } else {

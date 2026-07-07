@@ -45,7 +45,10 @@ final class AppState: ObservableObject {
             lastError = nil
             let alive = Set(fetched.flatMap(\.windows).map(\.id))
             badges = badges.filter { alive.contains($0.key) }
-            if selectedSessionName == nil { selectedSessionName = fetched.first?.name }
+            // 未選択、または選択中の session が消えた (kill 等) 場合は先頭にフォールバックする
+            if selectedSessionName == nil || !fetched.contains(where: { $0.name == selectedSessionName }) {
+                selectedSessionName = fetched.first?.name
+            }
             updateDockBadge()
         } catch {
             lastError = "\(error)"

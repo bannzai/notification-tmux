@@ -744,21 +744,37 @@ pbxproj への変更: SwiftTerm 1.13.0 のパッケージ参照追加 / `ENABLE_
 
 Metal Toolchain が未インストールで SwiftTerm の Shaders.metal がビルド不能だったため `xcodebuild -downloadComponent MetalToolchain` を実行した（環境セットアップ、コード変更なし）。
 
+実機検証で見つけた不具合と修正:
+
+- WindowGroup だと `open -g "ntmux://..."` の URL イベントごとに新規ウィンドウが開く → 単一ウィンドウの `Window("NTMUX", id: "main")` シーンに変更
+- 選択中 session が kill されると存在しない session への attach を繰り返す → refresh() で一覧に無い選択を先頭 session にフォールバック
+
+実機検証の結果（検証用 session `0-ntmux-test` を作成して実施、スクリーンショットは会話ログに提示済み）:
+
+1. アプリ起動でサイドバーに実 tmux の session/window 一覧が表示される ✓
+2. SwiftTerm が実 session に attach し描画・キー入力とも動作（System Events の keystroke が PTY 経由で tmux pane に到達、capture-pane で `hello-from-ntmux-terminal` の実行を確認）✓
+3. `open -g "ntmux://stop?..."` でサイドバーの該当 window にバッジ数字（first=2, second=1, session 合計 3）✓
+4. scripts/notification-tmux-hook-stop を実 pane の TMUX_PANE で実行 → 位置解決 → バッジ加算を end-to-end 確認 ✓
+5. バッジ付き window 行のクリックで tmux のカレント window が @117(third) → @115(first) に切り替わり、バッジがクリアされる ✓
+6. メモリ使用量 RSS 125.9MB（cmux の 30GB に対し約 1/240）
+
+未完了（ユーザー操作待ち）: `~/.claude/settings.json` の Stop hooks への配線は auto モード分類器に拒否されたため手動追記が必要（README のスニペット参照）。
+
 ## チェックリスト
 
 ### 実装内容
-- [ ] 変更対象ファイルごとに具体的なコード提案をコードブロックで記載している
-- [ ] 既存コードのパターン・構成を確認し、同じパターンで実装している
-- [ ] 変更範囲が必要最小限であること
+- [x] 変更対象ファイルごとに具体的なコード提案をコードブロックで記載している
+- [x] 既存コードのパターン・構成を確認し、同じパターンで実装している
+- [x] 変更範囲が必要最小限であること
 
 ### macOS アプリ (Swift / xcodebuild)
-- [ ] `xcodebuild build` が成功する（ログ全文を `./tmp/build.log` に保存し `grep -i -e warning -e error` で全文検査。warning があれば報告に含める）
-- [ ] `xcodebuild test` が全件パスする
-- [ ] XcodeGen (`project.yml`) を変更した場合、`xcodegen generate` を実行して `.xcodeproj` を再生成している
+- [x] `xcodebuild build` が成功する（ログ全文を `./tmp/build.log` に保存し `grep -i -e warning -e error` で全文検査。warning があれば報告に含める）
+- [x] `xcodebuild test` が全件パスする
+- [x] XcodeGen (`project.yml`) を変更した場合、`xcodegen generate` を実行して `.xcodeproj` を再生成している
 
 ### hooks / スクリプト（シェルスクリプトに変更がある場合）
-- [ ] hook スクリプトは冪等である（冪等にできない場合は理由をコメントで明記）
-- [ ] 既存の Claude hooks（cmux 通知等）の動作を壊していない
+- [x] hook スクリプトは冪等である（冪等にできない場合は理由をコメントで明記）
+- [x] 既存の Claude hooks（cmux 通知等）の動作を壊していない
 
 ### 共通
-- [ ] エラーメッセージはそのまま表示（加工・プレフィックス除去なし）
+- [x] エラーメッセージはそのまま表示（加工・プレフィックス除去なし）
