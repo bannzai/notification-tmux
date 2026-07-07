@@ -1,0 +1,26 @@
+#!/bin/bash
+# Claude Code の Stop hook から呼ばれ、発火元の tmux session/window を
+# NTMUX.app に URL スキームで通知する。
+# このスクリプト自体は状態を持たない。ただし冪等ではない: 1 回の呼び出しが
+# アプリ側のバッジを 1 加算する「イベント通知」であり、重複実行の抑止は
+# hook の発火回数 (Stop 1 回につき 1 回) に委ねるため。
+# tmux 外や tmux/アプリ不在の環境では何もせず正常終了する (Claude 側を絶対にブロックしない)。
+set -u
+
+[ -n "${TMUX_PANE:-}" ] || exit 0
+command -v tmux >/dev/null 2>&1 || exit 0
+
+session=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null) || exit 0
+window=$(tmux display-message -p -t "$TMUX_PANE" '#{window_id}' 2>/dev/null) || exit 0
+[ -n "$session" ] && [ -n "$window" ] || exit 0
+
+# session 名は空白や記号を含み得るため URL エンコードする (jq 不在時は素通しにフォールバック)
+if command -v jq >/dev/null 2>&1; then
+  session_enc=$(printf %s "$session" | jq -sRr @uri)
+else
+  session_enc=$session
+fi
+
+# -g: アプリをフォアグラウンド化せずに URL イベントを届ける (未起動なら背面で起動)
+open -g "ntmux://stop?session=${session_enc}&window=${window}" 2>/dev/null || true
+exit 0

@@ -1,59 +1,23 @@
-//
-//  ContentView.swift
-//  NTMUX
-//
-//  Created by bannzai on 2026/07/08.
-//
-
 import SwiftUI
-import SwiftData
 
+/// ルート画面。左に通知センター兼サイドバー、右に選択中 session の terminal。
 struct ContentView: View {
-    @Environment(\.modelContext) private var modelContext
-    @Query private var items: [Item]
+    @EnvironmentObject var appState: AppState
 
     var body: some View {
         NavigationSplitView {
-            List {
-                ForEach(items) { item in
-                    NavigationLink {
-                        Text("Item at \(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))")
-                    } label: {
-                        Text(item.timestamp, format: Date.FormatStyle(date: .numeric, time: .standard))
-                    }
-                }
-                .onDelete(perform: deleteItems)
-            }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-            .toolbar {
-                ToolbarItem {
-                    Button(action: addItem) {
-                        Label("Add Item", systemImage: "plus")
-                    }
-                }
-            }
+            SidebarView()
+                .navigationSplitViewColumnWidth(min: 200, ideal: 260)
         } detail: {
-            Text("Select an item")
-        }
-    }
-
-    private func addItem() {
-        withAnimation {
-            let newItem = Item(timestamp: Date())
-            modelContext.insert(newItem)
-        }
-    }
-
-    private func deleteItems(offsets: IndexSet) {
-        withAnimation {
-            for index in offsets {
-                modelContext.delete(items[index])
+            if let sessionName = appState.selectedSessionName {
+                TerminalHostView(sessionName: sessionName)
+            } else {
+                ContentUnavailableView(
+                    "tmux session がありません",
+                    systemImage: "terminal",
+                    description: Text(appState.lastError ?? "tmux server が起動していないか、session が 0 個です")
+                )
             }
         }
     }
-}
-
-#Preview {
-    ContentView()
-        .modelContainer(for: Item.self, inMemory: true)
 }

@@ -727,6 +727,23 @@ exit 0
 }
 ```
 
+## 追記: ユーザー作成の NTMUX Xcode プロジェクトを採用（実装時の変更）
+
+実装開始時点でユーザーが Xcode 26.5 で作成した `NTMUX/`（macOS App テンプレート、com.bannzai.NTMUX、Development Team 設定済み）がリポジトリに存在したため、XcodeGen 新規構成をやめてこれを土台に採用した。プラン本文からの差分:
+
+| 項目 | プラン当初 | 採用 |
+| --- | --- | --- |
+| アプリ名 / Bundle ID | NotificationTmux / com.bannzai.NotificationTmux | **NTMUX / com.bannzai.NTMUX** |
+| プロジェクト生成 | XcodeGen (project.yml) | **ユーザー作成の NTMUX.xcodeproj を直接編集**（Xcode 26 の folder-synchronized 形式のためソース追加はファイル配置のみで済む） |
+| URL スキーム | nottmux:// | **ntmux://**（アプリ名に合わせた） |
+| ソース配置 | NotificationTmux/ | NTMUX/NTMUX/（テスト: NTMUX/NTMUXTests/） |
+| Deployment Target | macOS 15.0 | macOS 26.2（テンプレート既定のまま） |
+| 署名 | ad-hoc | Automatic + Development Team（テンプレート既定のまま） |
+
+pbxproj への変更: SwiftTerm 1.13.0 のパッケージ参照追加 / `ENABLE_APP_SANDBOX = NO`（SwiftTerm の要件）/ `INFOPLIST_FILE = Info.plist`（CFBundleURLTypes の合成用、GENERATE_INFOPLIST_FILE とマージされる）/ `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor → nonisolated`（バックグラウンドで tmux CLI を叩く設計のため、明示 @MainActor 方式に統一）。テンプレートの SwiftData ファイル (Item.swift) と Testing テンプレートは削除。xcodebuild 用に共有スキーム NTMUX を追加（test は unit テストのみ。UI テストはスコープ外）。
+
+Metal Toolchain が未インストールで SwiftTerm の Shaders.metal がビルド不能だったため `xcodebuild -downloadComponent MetalToolchain` を実行した（環境セットアップ、コード変更なし）。
+
 ## チェックリスト
 
 ### 実装内容
