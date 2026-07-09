@@ -130,14 +130,41 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
                 : ["attach-session", "-t", "=\(sessionName)"]
         )
         theme?.apply(to: view)
+        applyFont(theme, to: view)
         return view
     }
 
-    /// Ghostty config を再読み込みして、表示中の view (単一 attach なので最大 1) に配色を再適用する。
-    /// メニュー「テーマを再読み込み」から呼ぶ。config 編集を再起動なしで反映するため。
+    /// Ghostty/Noroshi config を再読み込みして、表示中の view (単一 attach なので最大 1) に配色とフォントを再適用する。
+    /// メニュー「テーマを再読み込み」や設定ウィンドウの変更から呼ぶ。config 編集を再起動なしで反映するため。
     func reloadTheme() {
         theme = GhosttyTheme.load()
-        if let view = currentView { theme?.apply(to: view) }
+        if let view = currentView {
+            theme?.apply(to: view)
+            applyFont(theme, to: view)
+        }
+    }
+
+    /// 解決済み設定の font-family / font-size を TerminalView.font に反映する。
+    /// 両方 nil (未指定) のときは SwiftTerm の既定フォントを尊重して何もしない。
+    /// family が実在しなければ等幅システムフォントへフォールバックする。
+    /// font setter は selection 解除・レイアウト再計算の副作用があるため、値が変わる時だけ代入する (docs/knowledge.md)。
+    private func applyFont(_ theme: GhosttyTheme?, to view: TerminalView) {
+        guard let theme, theme.fontFamily != nil || theme.fontSize != nil else { return }
+        let base = view.font
+        let size = theme.fontSize.map { CGFloat($0) } ?? base.pointSize
+        let font: NSFont
+        if let family = theme.fontFamily, !family.isEmpty {
+            // weight 5 = regular / traits [] = ボールドやイタリックを付けない
+            font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: size)
+                ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        } else {
+            // family 未指定・size のみ指定 → 現在のフォントのサイズだけ変える
+            font = NSFont(descriptor: base.fontDescriptor, size: size)
+                ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        }
+        if view.font.fontName != font.fontName || view.font.pointSize != font.pointSize {
+            view.font = font
+        }
     }
 
     /// ホイール / 左ドラッグを横取りする local event monitor を 1 度だけ張る。生成済みなら何もしない (冪等)。
