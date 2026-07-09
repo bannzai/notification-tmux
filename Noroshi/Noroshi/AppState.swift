@@ -9,8 +9,14 @@ final class AppState: ObservableObject {
     /// 通知履歴の保持上限。超えた分は古いものから捨てる (メモリのみ)。
     static let notificationHistoryLimit = 1000
 
-    /// tmux から取得した session 一覧。
+    /// session の表示順を永続化する UserDefaults キー。
+    private static let sessionOrderDefaultsKey = "noroshi.sessionOrder"
+
+    /// tmux から取得した session 一覧 (tmux の list-sessions 順)。表示順は displaySessions が解決する。
     @Published private(set) var sessions: [TmuxSession] = []
+    /// ユーザーが指定した session の表示順 (session 名の配列)。UserDefaults に永続化する。
+    /// 実際の表示に使う順序は displaySessionNames が現存 session とマージして解決する。
+    @Published private(set) var sessionOrder: [String]
     /// windowID -> 未読数。Stop イベントで加算し、window を開いたらクリアする。
     @Published private(set) var badges: [String: Int] = [:]
     /// terminal を表示中の session 名。nil なら未選択。
@@ -28,6 +34,37 @@ final class AppState: ObservableObject {
     // テストからダミー binaryPath の client を注入するために定義している
     init(client: TmuxClient = TmuxClient()) {
         self.client = client
+        self.sessionOrder = UserDefaults.standard.stringArray(forKey: Self.sessionOrderDefaultsKey) ?? []
+    }
+
+    /// サイドバー・cmd+数字・session 隣接移動が共通で使う表示順の session 名。
+    /// 保存順 (sessionOrder) を現存 session とマージして解決する。順序解決はこの 1 箇所に集約する。
+    var displaySessionNames: [String] {
+        NoroshiNavigation.resolvedSessionOrder(savedOrder: sessionOrder, currentNames: sessions.map(\.name))
+    }
+
+    /// 表示順に並べ替えた session。サイドバーはこれを列挙する。
+    var displaySessions: [TmuxSession] {
+        let sessionsByName = Dictionary(uniqueKeysWithValues: sessions.map { ($0.name, $0) })
+        return displaySessionNames.compactMap { sessionsByName[$0] }
+    }
+
+    /// サイドバーのドラッグ&ドロップによる session 並べ替えを表示順に反映し、永続化する。
+    func moveSessions(fromOffsets source: IndexSet, toOffset destination: Int) {
+        var reordered = displaySessionNames
+        reordered.move(fromOffsets: source, toOffset: destination)
+        sessionOrder = reordered
+        UserDefaults.standard.set(reordered, forKey: Self.sessionOrderDefaultsKey)
+    }
+
+    /// 現存 session に合わせて保存順を掃除・追記し、変化があれば永続化する。
+    /// server 停止で一時的に session が空になった時に順序を失わないよう、session が空の間は掃除しない。
+    private func syncSessionOrder() {
+        guard !sessions.isEmpty else { return }
+        let resolved = displaySessionNames
+        guard resolved != sessionOrder else { return }
+        sessionOrder = resolved
+        UserDefaults.standard.set(resolved, forKey: Self.sessionOrderDefaultsKey)
     }
 
     /// session/window 一覧のポーリングを開始する。多重起動しない (冪等)。
@@ -48,13 +85,14 @@ final class AppState: ObservableObject {
             let fetched = try await Task.detached(priority: .utility) { try client.fetchSessions() }.value
             // 変化が無い時は再代入せず、2 秒ポーリング由来の不要な再描画 (terminal のフォーカス奪取等) を避ける。
             if fetched != sessions { sessions = fetched }
+            syncSessionOrder()
             lastError = nil
             let alive = Set(fetched.flatMap(\.windows).map(\.id))
             badges = badges.filter { alive.contains($0.key) }
-            // 未選択、または選択中の session が消えた (kill 等) 場合は先頭にフォールバックする。
+            // 未選択、または選択中の session が消えた (kill 等) 場合は表示順の先頭にフォールバックする。
             // これが「消えた session への再 attach ループ」を止めるガード (単一 attach の TerminalSessionManager と対で機能する)。
             if selectedSessionName == nil || !fetched.contains(where: { $0.name == selectedSessionName }) {
-                selectedSessionName = fetched.first?.name
+                selectedSessionName = displaySessionNames.first
             }
             updateDockBadge()
         } catch {
@@ -102,14 +140,14 @@ final class AppState: ObservableObject {
 
     /// 表示順で displayIndex 番目 (0 始まり) の session に切り替える (cmd+1..9)。
     func selectSession(atDisplayIndex displayIndex: Int) {
-        if let name = NoroshiNavigation.sessionName(in: sessions.map(\.name), atDisplayIndex: displayIndex) {
+        if let name = NoroshiNavigation.sessionName(in: displaySessionNames, atDisplayIndex: displayIndex) {
             selectedSessionName = name
         }
     }
 
     /// 表示順で offset (次: +1 / 前: -1) 隣の session に循環で切り替える (cmd+shift+j/k)。
     func selectAdjacentSession(_ offset: Int) {
-        if let name = NoroshiNavigation.adjacentSessionName(in: sessions.map(\.name), from: selectedSessionName, offset: offset) {
+        if let name = NoroshiNavigation.adjacentSessionName(in: displaySessionNames, from: selectedSessionName, offset: offset) {
             selectedSessionName = name
         }
     }

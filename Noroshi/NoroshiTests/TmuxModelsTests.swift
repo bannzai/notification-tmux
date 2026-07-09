@@ -113,4 +113,37 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertNil(NoroshiNavigation.sessionName(in: names, atDisplayIndex: 3))
         XCTAssertNil(NoroshiNavigation.sessionName(in: names, atDisplayIndex: -1))
     }
+
+    func testResolvedSessionOrder() {
+        // 保存順を保ちつつ、新規 session (D) を末尾へ足す
+        XCTAssertEqual(
+            NoroshiNavigation.resolvedSessionOrder(savedOrder: ["C", "A", "B"], currentNames: ["A", "B", "C", "D"]),
+            ["C", "A", "B", "D"]
+        )
+        // 消えた session (X) は結果から落とす
+        XCTAssertEqual(
+            NoroshiNavigation.resolvedSessionOrder(savedOrder: ["X", "A", "B"], currentNames: ["A", "B"]),
+            ["A", "B"]
+        )
+        // 保存順が空なら現存順そのまま
+        XCTAssertEqual(
+            NoroshiNavigation.resolvedSessionOrder(savedOrder: [], currentNames: ["A", "B"]),
+            ["A", "B"]
+        )
+        // 現存が空なら空 (server 停止時に順序を失わない掃除抑止は AppState 側の責務)
+        XCTAssertEqual(
+            NoroshiNavigation.resolvedSessionOrder(savedOrder: ["A", "B"], currentNames: []),
+            []
+        )
+        // 保存順の重複は先勝ちで 1 つに畳む
+        XCTAssertEqual(
+            NoroshiNavigation.resolvedSessionOrder(savedOrder: ["A", "A", "B"], currentNames: ["A", "B"]),
+            ["A", "B"]
+        )
+        // 全 session が保存順に無い場合も現存順で返す
+        XCTAssertEqual(
+            NoroshiNavigation.resolvedSessionOrder(savedOrder: ["Z"], currentNames: ["A", "B"]),
+            ["A", "B"]
+        )
+    }
 }

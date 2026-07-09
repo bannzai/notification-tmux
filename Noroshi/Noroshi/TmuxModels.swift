@@ -110,4 +110,15 @@ enum NoroshiNavigation {
     static func latestUnreadWindowID(history: [NotificationRecord], badges: [String: Int]) -> String? {
         history.last(where: { (badges[$0.windowID] ?? 0) > 0 })?.windowID
     }
+
+    /// 保存済みの表示順 savedOrder と現存 session 名 currentNames をマージし、表示順を解決する。
+    /// - savedOrder のうち現存する session を保存順のまま先頭に並べる (消えた session は落とす)。
+    /// - savedOrder に無い新規 session は currentNames の順で末尾に足す。
+    /// - savedOrder に重複があっても先勝ちで 1 つに畳む。
+    static func resolvedSessionOrder(savedOrder: [String], currentNames: [String]) -> [String] {
+        let currentNameSet = Set(currentNames)
+        var seenNames = Set<String>()
+        let keptNames = savedOrder.filter { currentNameSet.contains($0) && seenNames.insert($0).inserted }
+        return keptNames + currentNames.filter { !seenNames.contains($0) }
+    }
 }
