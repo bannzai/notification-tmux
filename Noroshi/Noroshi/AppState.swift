@@ -46,7 +46,8 @@ final class AppState: ObservableObject {
         let client = self.client
         do {
             let fetched = try await Task.detached(priority: .utility) { try client.fetchSessions() }.value
-            sessions = fetched
+            // 変化が無い時は再代入せず、2 秒ポーリング由来の不要な再描画 (terminal のフォーカス奪取等) を避ける。
+            if fetched != sessions { sessions = fetched }
             lastError = nil
             let alive = Set(fetched.flatMap(\.windows).map(\.id))
             badges = badges.filter { alive.contains($0.key) }
@@ -57,7 +58,16 @@ final class AppState: ObservableObject {
             }
             updateDockBadge()
         } catch {
-            lastError = "\(error)"
+            // 同一エラーの再代入は objectWillChange を無駄に発火させるため値が変わった時だけ更新する。
+            let message = "\(error)"
+            if lastError != message { lastError = message }
+            // server 停止 (no-server) 時は消えた session を残さず「session なし」に統一し、
+            // 2 秒ごとに即失敗する attach の spawn を止める。一時的なエラーでは従来どおり sessions を保持する。
+            guard (error as? TmuxClientError)?.isNoServer == true else { return }
+            if !sessions.isEmpty { sessions = [] }
+            if selectedSessionName != nil { selectedSessionName = nil }
+            if !badges.isEmpty { badges = [:] }
+            updateDockBadge()
         }
     }
 

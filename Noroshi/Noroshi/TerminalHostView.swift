@@ -14,8 +14,6 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     private var currentSessionName: String?
     /// 現在 attach 中の terminal view。
     private var currentView: LocalProcessTerminalView?
-    /// こちらが切替で明示的に terminate した view。後から遅れて届く processTerminated を無視するため。
-    private var intentionallyTerminated: Set<ObjectIdentifier> = []
     /// Ghostty config 由来の配色。起動時に一度読み、メニュー「テーマを再読み込み」で更新する。config が無ければ nil。
     private var theme = GhosttyTheme.load()
 
@@ -26,7 +24,6 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
             return view
         }
         if let old = currentView {
-            intentionallyTerminated.insert(ObjectIdentifier(old))
             old.terminate()
         }
         let view = makeTerminalView(for: sessionName)
@@ -64,14 +61,12 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
 
-    /// attach プロセス終了時の後始末。
-    /// - こちらが切替で terminate した view: 無視する (期待どおりの終了)。
-    /// - 表示中の view が予期せず死んだ (session kill / detach): 現在の attach を手放す。
-    ///   再表示は AppState.refresh() の先頭フォールバックが選択を生存 session に移すことで安全に行われる (再 attach ループ防止)。
+    /// attach プロセスが予期せず終了した (session kill / detach) ときの後始末。
+    /// 切替で明示的に terminate() した view はここに来ない: SwiftTerm 1.13.0 の
+    /// LocalProcess.terminate() は childMonitor を cancel するため processTerminated を発火しない。
+    /// よって source が現在の view のときだけ attach を手放せばよい。
+    /// 再表示は AppState.refresh() の先頭フォールバックが選択を生存 session に移すことで安全に行われる (再 attach ループ防止)。
     func processTerminated(source: TerminalView, exitCode: Int32?) {
-        if intentionallyTerminated.remove(ObjectIdentifier(source)) != nil {
-            return
-        }
         if source === currentView {
             currentView = nil
             currentSessionName = nil
@@ -95,20 +90,21 @@ struct TerminalHostView: NSViewRepresentable {
         install(on: container)
     }
 
-    /// sessionName の terminal view をコンテナに取り付け、フォーカスを当てる。
+    /// sessionName の terminal view をコンテナに取り付け、新規取り付け時だけフォーカスを当てる。
     private func install(on container: NSView) {
         let terminal = TerminalSessionManager.shared.terminalView(for: sessionName)
-        if terminal.superview !== container {
-            container.subviews.forEach { $0.removeFromSuperview() }
-            terminal.translatesAutoresizingMaskIntoConstraints = false
-            container.addSubview(terminal)
-            NSLayoutConstraint.activate([
-                terminal.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-                terminal.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-                terminal.topAnchor.constraint(equalTo: container.topAnchor),
-                terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor),
-            ])
-        }
+        // superview が変わっていない (ポーリング由来の再描画) 場合は取り付けもフォーカス移動もしない。
+        // 毎回 makeFirstResponder するとサイドバー等からフォーカスを奪ってしまうため新規取り付け時のみに限定する。
+        guard terminal.superview !== container else { return }
+        container.subviews.forEach { $0.removeFromSuperview() }
+        terminal.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(terminal)
+        NSLayoutConstraint.activate([
+            terminal.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            terminal.trailingAnchor.constraint(equalTo: container.trailingAnchor),
+            terminal.topAnchor.constraint(equalTo: container.topAnchor),
+            terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+        ])
         // updateNSView の同期処理中に firstResponder を変えると SwiftUI の更新と競合するため次の runloop に回す
         DispatchQueue.main.async {
             if let window = terminal.window, window.firstResponder !== terminal {

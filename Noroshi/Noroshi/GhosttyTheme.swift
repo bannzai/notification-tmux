@@ -31,16 +31,18 @@ struct GhosttyTheme {
     /// SwiftTerm の TerminalView (実体は LocalProcessTerminalView) に色を適用する。
     /// nil の項目は触らないため、部分指定のテーマは指定された項目だけを反映する。
     func apply(to terminal: TerminalView) {
+        // palette の有無に関わらず 16..255 を Ghostty と同じ xterm 標準生成に固定する。
+        // 既定戦略の base16Lab は 16..255 を base16 から LAB 補間するため Ghostty と一致せず、
+        // さらに base16Lab 下では bg/fg 設定のたびに 16..255 が LAB 再補間されて劣化する。
+        // computed プロパティ経由で設定して即時 rebuild を起こす (options への直接代入では rebuild が走らない)。
+        terminal.getTerminal().ansi256PaletteStrategy = .xterm
         if let background { terminal.nativeBackgroundColor = Self.nsColor(background) }
         if let foreground { terminal.nativeForegroundColor = Self.nsColor(foreground) }
         if let cursorColor { terminal.caretColor = Self.nsColor(cursorColor) }
         if let selectionBackground { terminal.selectedTextBackgroundColor = Self.nsColor(selectionBackground) }
         // selection-foreground は SwiftTerm 1.13.0 に対応 API が無いため適用しない (NOTES.md 参照)
         guard !palette.isEmpty else { return }
-        // SwiftTerm の installColors は 16 色 (ANSI 0..15) を受け取り 16..255 を内部で生成する。
-        // 既定戦略の base16Lab は 16..255 を base16 から LAB 補間するため Ghostty と一致しない。
-        // Ghostty と同じ標準 xterm パレットで補完させるため戦略を xterm に固定してから流す。
-        terminal.getTerminal().options.ansi256PaletteStrategy = .xterm
+        // installColors は 16 色 (ANSI 0..15) を受け取り、上で固定した xterm 戦略で 16..255 を再生成する。
         terminal.installColors(Array(Self.ansi256Palette(explicit: palette).prefix(16)))
     }
 

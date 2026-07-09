@@ -10,6 +10,16 @@ enum TmuxClientError: Error, CustomStringConvertible {
             return "tmux exited with status \(status): \(stderr)"
         }
     }
+
+    /// tmux server 自体が停止している (no-server) ことを表すエラーか。
+    /// kill-server や最後の session を閉じた時に server ごと終了すると tmux はこのエラーを返す。
+    /// この場合はサイドバーの session を空にして消えた session への再 attach ループを止める判断に使う。
+    var isNoServer: Bool {
+        switch self {
+        case .commandFailed(_, let stderr):
+            return stderr.contains("no server running") || stderr.contains("error connecting")
+        }
+    }
 }
 
 /// tmux CLI のラッパ。attach 以外の照会・操作コマンドはすべてここを経由する。

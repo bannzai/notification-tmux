@@ -283,6 +283,18 @@ final class GhosttyThemeTests: XCTestCase {
         XCTAssertEqual(view.nativeForegroundColor, baseline)
     }
 
+    func testApplyForcesXtermStrategyWithoutPalette() {
+        let view = TerminalView(frame: CGRect(x: 0, y: 0, width: 400, height: 300))
+        // palette を持たない (background/foreground だけの) 最小構成のテーマ
+        let (theme, _) = GhosttyTheme.parse(configText: """
+        background = #303446
+        foreground = #c6d0f5
+        """)
+        theme.apply(to: view)
+        // palette の有無に関わらず 16..255 を Ghostty と同じ xterm 標準生成に固定する
+        XCTAssertEqual(view.getTerminal().options.ansi256PaletteStrategy, .xterm)
+    }
+
     /// NSColor を deviceRGB に変換して 8bit 成分が期待値と一致するか検証する。
     private func assertDeviceRGB(_ color: NSColor, equals expected: (Int, Int, Int),
                                  file: StaticString = #filePath, line: UInt = #line) {

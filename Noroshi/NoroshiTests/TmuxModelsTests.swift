@@ -87,6 +87,15 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertNil(NoroshiNavigation.latestUnreadWindowID(history: [], badges: ["@1": 1]))
     }
 
+    func testTmuxClientErrorIsNoServer() {
+        // server 停止時に tmux が返す代表的な stderr は no-server 扱い
+        XCTAssertTrue(TmuxClientError.commandFailed(status: 1, stderr: "no server running on /tmp/tmux-501/default").isNoServer)
+        XCTAssertTrue(TmuxClientError.commandFailed(status: 1, stderr: "error connecting to /tmp/tmux-501/default (No such file or directory)").isNoServer)
+        // それ以外 (一時的な失敗・空 stderr) は no-server ではない
+        XCTAssertFalse(TmuxClientError.commandFailed(status: 1, stderr: "can't find session: foo").isNoServer)
+        XCTAssertFalse(TmuxClientError.commandFailed(status: 1, stderr: "").isNoServer)
+    }
+
     func testAdjacentSessionName() {
         let names = ["A", "B", "C"]
         XCTAssertEqual(NoroshiNavigation.adjacentSessionName(in: names, from: "A", offset: 1), "B")

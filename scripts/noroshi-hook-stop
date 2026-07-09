@@ -14,11 +14,24 @@ session=$(tmux display-message -p -t "$TMUX_PANE" '#{session_name}' 2>/dev/null)
 window=$(tmux display-message -p -t "$TMUX_PANE" '#{window_id}' 2>/dev/null) || exit 0
 [ -n "$session" ] && [ -n "$window" ] || exit 0
 
-# session 名は空白や記号を含み得るため URL エンコードする (jq 不在時は素通しにフォールバック)
+# session 名は空白や記号を含み得るため URL エンコードする。
+# 特に `#` はエンコードしないと URL の fragment 区切りとして window パラメータを切り落とし、通知が黙って失われる。
+# jq 不在時も bash で percent-encode する (unreserved 文字以外はすべて %XX 化)。
 if command -v jq >/dev/null 2>&1; then
   session_enc=$(printf %s "$session" | jq -sRr @uri)
 else
-  session_enc=$session
+  # 本体 shebang の /bin/bash は 3.2 で $(...) 内の case が構文エラーになるため、
+  # 命令置換を使わず session_enc へ直接組み立てる。マルチバイトはバイト単位で符号化するため C ロケールにする。
+  LC_ALL=C
+  session_enc=
+  for ((i = 0; i < ${#session}; i++)); do
+    c=${session:i:1}
+    case $c in
+      [a-zA-Z0-9.~_-]) session_enc+=$c ;;
+      # "'$c" のバイト値は上位ビット立ちで符号拡張されるため & 0xFF で 1 バイトに丸める
+      *) printf -v ord '%d' "'$c"; printf -v hex '%%%02X' "$(( ord & 0xFF ))"; session_enc+=$hex ;;
+    esac
+  done
 fi
 
 # -g: アプリをフォアグラウンド化せずに URL イベントを届ける (未起動なら背面で起動)
