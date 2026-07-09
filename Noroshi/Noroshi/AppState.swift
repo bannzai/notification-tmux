@@ -23,6 +23,8 @@ final class AppState: ObservableObject {
     @Published var selectedSessionName: String?
     /// 直近の tmux コマンド失敗。エラーメッセージは加工せずそのまま表示する。
     @Published var lastError: String?
+    /// コマンドパレット (cmd+P) の表示状態。true の間だけ terminal の上にオーバーレイを重ねる。
+    @Published var isPalettePresented = false
 
     /// Stop イベントの受信履歴 (古い順)。「最新の通知へジャンプ」の発生順解決に使う。バッジ台帳とは独立。
     private var notifications: [NotificationRecord] = []
@@ -47,6 +49,14 @@ final class AppState: ObservableObject {
     var displaySessions: [TmuxSession] {
         let sessionsByName = Dictionary(uniqueKeysWithValues: sessions.map { ($0.name, $0) })
         return displaySessionNames.compactMap { sessionsByName[$0] }
+    }
+
+    /// コマンドパレットが列挙する候補。表示順の session ごとに、session 行 → 配下 window 行の順で平坦化する。
+    var paletteItems: [PaletteItem] {
+        displaySessions.flatMap { session in
+            [PaletteItem(kind: .session(name: session.name), badge: badgeCount(for: session))]
+                + session.windows.map { PaletteItem(kind: .window($0), badge: badges[$0.id] ?? 0) }
+        }
     }
 
     /// サイドバーのドラッグ&ドロップによる session 並べ替えを表示順に反映し、永続化する。
@@ -135,6 +145,14 @@ final class AppState: ObservableObject {
             } catch {
                 await MainActor.run { self.lastError = "\(error)" }
             }
+        }
+    }
+
+    /// コマンドパレットで候補を決定したときの遷移。session 行は選択、window 行は open (session 切替 + select-window + バッジクリア)。
+    func activate(paletteItem: PaletteItem) {
+        switch paletteItem.kind {
+        case .session(let name): selectedSessionName = name
+        case .window(let window): open(window: window)
         }
     }
 

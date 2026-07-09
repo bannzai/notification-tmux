@@ -43,7 +43,15 @@ struct NavigationCommands: Commands {
     @ObservedObject var appState: AppState
 
     var body: some Commands {
+        // cmd+P は標準の Print と衝突するため、Print 系メニューを空で置き換えて cmd+P をコマンドパレットへ解放する。
+        CommandGroup(replacing: .printItem) {}
+
         CommandMenu("移動") {
+            Button("コマンドパレット") { appState.isPalettePresented.toggle() }
+                .keyboardShortcut("p", modifiers: .command)
+
+            Divider()
+
             Button("次の window") { appState.moveWindow(1) }
                 .keyboardShortcut("j", modifiers: .command)
             Button("前の window") { appState.moveWindow(-1) }
