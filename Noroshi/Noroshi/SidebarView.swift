@@ -7,11 +7,21 @@ struct SidebarView: View {
     /// 折りたたみ中の session 名。未収録 = 展開扱いで、既定はすべて展開し従来どおり window を常時表示する。
     @State private var collapsedSessionNames: Set<String> = []
 
+    /// フィルタ (テキスト or 通知) が有効かどうか。有効時は一致 window が隠れないよう DisclosureGroup を強制展開する。
+    private var isFiltering: Bool {
+        !appState.sidebarQuery.trimmingCharacters(in: .whitespaces).isEmpty || appState.showsNotifiedOnly
+    }
+
     var body: some View {
         List {
+            if isFiltering && appState.filteredDisplaySessions.isEmpty {
+                Text("一致なし")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             // session を Section ではなく単一 ForEach の行 (DisclosureGroup) にすることで .onMove が効く。
             // .onMove は 1 つの ForEach データソース内の行入れ替えのみ対応し、Section 間の移動はできないため。
-            ForEach(appState.displaySessions) { session in
+            ForEach(appState.filteredDisplaySessions) { session in
                 DisclosureGroup(isExpanded: expansionBinding(for: session.name)) {
                     ForEach(session.windows) { window in
                         WindowRow(
@@ -38,20 +48,57 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
-            if let error = appState.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
+            VStack(spacing: 0) {
+                if let error = appState.lastError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                }
+                filterBar
             }
         }
     }
 
-    /// session の展開状態への Binding。collapsedSessionNames に無ければ展開扱い。
+    /// Xcode のファイルナビゲータ風のフィルタバー。虫眼鏡 + 入力欄 + クリアボタン + 通知フィルタトグル。
+    private var filterBar: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("フィルタ", text: $appState.sidebarQuery)
+                .textFieldStyle(.plain)
+                .font(.caption)
+            if !appState.sidebarQuery.isEmpty {
+                Button {
+                    appState.sidebarQuery = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            }
+            Button {
+                appState.showsNotifiedOnly.toggle()
+            } label: {
+                Image(systemName: "bell.badge")
+                    .foregroundStyle(appState.showsNotifiedOnly ? Color.accentColor : .secondary)
+            }
+            .buttonStyle(.plain)
+            .help("通知が来ている window だけ表示")
+        }
+        .font(.caption)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(.bar)
+    }
+
+    /// session の展開状態への Binding。フィルタ中は一致 window を隠さないよう常に展開扱いにする。
+    /// 非フィルタ時は collapsedSessionNames に無ければ展開扱い。
     private func expansionBinding(for sessionName: String) -> Binding<Bool> {
         Binding(
-            get: { !collapsedSessionNames.contains(sessionName) },
+            get: { isFiltering || !collapsedSessionNames.contains(sessionName) },
             set: { isExpanded in
                 if isExpanded {
                     collapsedSessionNames.remove(sessionName)
