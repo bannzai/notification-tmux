@@ -105,15 +105,13 @@ struct WindowRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
+                // tmux 上のアクティブ window は緑丸ではなく index の着色で控えめに示す (通知バッジとの誤認を避ける)。
                 Text(String(window.index))
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(window.isActive ? Color.accentColor : .secondary)
                 Text(window.name)
                     .lineLimit(1)
                     .fontWeight(isSelected ? .semibold : .regular)
-                if window.isActive {
-                    Circle().fill(.green).frame(width: 6, height: 6)
-                }
                 Spacer()
                 BadgeLabel(count: badge)
             }
@@ -130,7 +128,8 @@ struct WindowRow: View {
     }
 }
 
-/// 未読数の赤バッジ。0 のときは何も表示しない。
+/// 未読数の赤い丸数字バッジ。0 のときは何も表示しない。
+/// 1 桁は真円 (幅 = 高さ)、2 桁以上は横に伸びる Capsule になる (min 幅 = 高さ 18)。
 struct BadgeLabel: View {
     /// 表示する未読数。
     let count: Int
@@ -138,10 +137,10 @@ struct BadgeLabel: View {
     var body: some View {
         if count > 0 {
             Text(String(count))
-                .font(.caption2.bold())
+                .font(.caption2.monospacedDigit().bold())
                 .foregroundStyle(.white)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
+                .padding(.horizontal, 5)
+                .frame(minWidth: 18, minHeight: 18)
                 .background(Capsule().fill(.red))
         }
     }
