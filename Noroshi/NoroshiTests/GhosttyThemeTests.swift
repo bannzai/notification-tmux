@@ -251,6 +251,52 @@ final class GhosttyThemeTests: XCTestCase {
         XCTAssertEqual(theme?.background, color8(0x01, 0x02, 0x03))
     }
 
+    // MARK: - font-family / font-size
+
+    func testParsesFontKeys() {
+        let (theme, _) = GhosttyTheme.parse(configText: """
+        font-family = JetBrains Mono
+        font-size = 14
+        """)
+        XCTAssertEqual(theme.fontFamily, "JetBrains Mono")
+        XCTAssertEqual(theme.fontSize, 14)
+    }
+
+    func testFontSizeParsesDecimal() {
+        let (theme, _) = GhosttyTheme.parse(configText: "font-size = 13.5")
+        XCTAssertEqual(theme.fontSize, 13.5)
+    }
+
+    func testFontKeysIgnoreEmptyAndInvalidValues() {
+        let (theme, _) = GhosttyTheme.parse(configText: """
+        font-family =
+        font-size = not-a-number
+        """)
+        XCTAssertNil(theme.fontFamily)  // 空値は未設定扱い
+        XCTAssertNil(theme.fontSize)    // 数値でない値は無視
+    }
+
+    func testFontKeysDefaultToNil() {
+        let (theme, _) = GhosttyTheme.parse(configText: "background = #303446")
+        XCTAssertNil(theme.fontFamily)
+        XCTAssertNil(theme.fontSize)
+    }
+
+    func testConfigFontOverridesThemeFont() throws {
+        // theme ファイルにフォントがあっても config 側が優先する (overlaid の font 経路)
+        let themesDir = try makeTempDirectory()
+        try "font-size = 10".write(to: themesDir.appendingPathComponent("FontTheme"), atomically: true, encoding: .utf8)
+        let theme = GhosttyTheme.resolve(
+            configText: """
+            theme = FontTheme
+            font-size = 20
+            """,
+            themesDirectories: [themesDir.path],
+            prefersDark: true
+        )
+        XCTAssertEqual(theme.fontSize, 20)
+    }
+
     // MARK: - SwiftTerm への適用
 
     func testApplyMapsColorsToTerminalView() {

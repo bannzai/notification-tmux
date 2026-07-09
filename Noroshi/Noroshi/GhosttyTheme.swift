@@ -17,14 +17,18 @@ struct GhosttyTheme {
     let selectionForeground: SwiftTerm.Color?
     /// 明示指定された palette エントリ (index 0..255 -> 色)。未指定 index は `ansi256Palette` が標準式で補完する。
     let palette: [Int: SwiftTerm.Color]
+    /// フォントファミリ (`font-family`)。config レベルで読む (theme ファイル内対応は不要)。未指定なら nil。
+    let fontFamily: String?
+    /// フォントサイズ (`font-size`、pt)。未指定なら nil。
+    let fontSize: Double?
 
     // MARK: - Public API
 
-    /// `~/.config/ghostty/config` (XDG_CONFIG_HOME を尊重) を起点にテーマを解決する。
-    /// config が無い・読めない場合は nil。
+    /// 既定 config (noroshi config を優先し、無ければ ghostty config にフォールバック) を起点にテーマを解決する。
+    /// config が無い・読めない場合は nil。パス解決は NoroshiConfig に集約している。
     static func load() -> GhosttyTheme? {
-        load(configPath: defaultConfigPath(),
-             themesDirectories: defaultThemesDirectories(),
+        load(configPath: NoroshiConfig.resolvedConfigPath(),
+             themesDirectories: NoroshiConfig.themesDirectories(),
              prefersDark: systemPrefersDark())
     }
 
@@ -79,7 +83,9 @@ struct GhosttyTheme {
             cursorColor: override.cursorColor ?? cursorColor,
             selectionBackground: override.selectionBackground ?? selectionBackground,
             selectionForeground: override.selectionForeground ?? selectionForeground,
-            palette: palette.merging(override.palette) { _, overrideColor in overrideColor }
+            palette: palette.merging(override.palette) { _, overrideColor in overrideColor },
+            fontFamily: override.fontFamily ?? fontFamily,
+            fontSize: override.fontSize ?? fontSize
         )
     }
 
@@ -90,6 +96,8 @@ struct GhosttyTheme {
     static func parse(configText: String) -> (theme: GhosttyTheme, themeRef: String?) {
         var background, foreground, cursorColor, selectionBackground, selectionForeground: SwiftTerm.Color?
         var palette: [Int: SwiftTerm.Color] = [:]
+        var fontFamily: String?
+        var fontSize: Double?
         var themeRef: String?
         for rawLine in configText.split(separator: "\n", omittingEmptySubsequences: false) {
             guard let (key, value) = parseLine(String(rawLine)) else { continue }
@@ -102,12 +110,15 @@ struct GhosttyTheme {
             case "selection-foreground": selectionForeground = parseColor(value) ?? selectionForeground
             case "palette":
                 if let entry = parsePaletteEntry(value) { palette[entry.index] = entry.color }
+            // font-family / font-size は Ghostty と同名キー。空値・非数値は未設定のまま無視する。
+            case "font-family": if !value.isEmpty { fontFamily = value }
+            case "font-size": if let size = Double(value) { fontSize = size }
             default: break
             }
         }
         return (GhosttyTheme(background: background, foreground: foreground, cursorColor: cursorColor,
                              selectionBackground: selectionBackground, selectionForeground: selectionForeground,
-                             palette: palette),
+                             palette: palette, fontFamily: fontFamily, fontSize: fontSize),
                 themeRef)
     }
 
@@ -204,22 +215,6 @@ struct GhosttyTheme {
         color8(127, 127, 127), color8(255, 0, 0), color8(0, 255, 0), color8(255, 255, 0),
         color8(92, 92, 255), color8(255, 0, 255), color8(0, 255, 255), color8(255, 255, 255),
     ]
-
-    /// XDG_CONFIG_HOME (未設定なら `~/.config`) を基点とした ghostty 設定ディレクトリ。
-    private static func configHome() -> String {
-        ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"] ?? (NSHomeDirectory() + "/.config")
-    }
-
-    /// 既定の config パス。
-    private static func defaultConfigPath() -> String {
-        configHome() + "/ghostty/config"
-    }
-
-    /// 名前指定 theme の探索ディレクトリ (優先順)。ユーザーディレクトリ → Ghostty.app 同梱テーマ。
-    private static func defaultThemesDirectories() -> [String] {
-        [configHome() + "/ghostty/themes",
-         "/Applications/Ghostty.app/Contents/Resources/ghostty/themes"]
-    }
 
     /// システムの外観がダークかどうか。theme の light/dark 記法の選択に使う。
     private static func systemPrefersDark() -> Bool {
