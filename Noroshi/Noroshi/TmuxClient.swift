@@ -10,6 +10,16 @@ enum TmuxClientError: Error, CustomStringConvertible {
             return "tmux exited with status \(status): \(stderr)"
         }
     }
+
+    /// tmux server 自体が停止している (no-server) ことを表すエラーか。
+    /// kill-server や最後の session を閉じた時に server ごと終了すると tmux はこのエラーを返す。
+    /// この場合はサイドバーの session を空にして消えた session への再 attach ループを止める判断に使う。
+    var isNoServer: Bool {
+        switch self {
+        case .commandFailed(_, let stderr):
+            return stderr.contains("no server running") || stderr.contains("error connecting")
+        }
+    }
 }
 
 /// tmux CLI のラッパ。attach 以外の照会・操作コマンドはすべてここを経由する。
@@ -72,5 +82,27 @@ struct TmuxClient {
     /// window_id はサーバ全体で一意なので session 指定は不要。
     func selectWindow(id: String) throws {
         try run(["select-window", "-t", id])
+    }
+
+    /// session のカレント window を次の window に切り替える (末尾↔先頭で循環; tmux ネイティブ挙動)。
+    func nextWindow(session: String) throws {
+        try run(["next-window", "-t", "=\(session)"])
+    }
+
+    /// session のカレント window を前の window に切り替える (先頭↔末尾で循環; tmux ネイティブ挙動)。
+    func previousWindow(session: String) throws {
+        try run(["previous-window", "-t", "=\(session)"])
+    }
+
+    /// session のカレント window 内で、アクティブ pane を次 (offset >= 0) / 前 (offset < 0) の pane に移す (循環)。
+    /// pane index トークン `.+` / `.-` を使う (man tmux TARGET SYNTAX)。
+    func selectPane(session: String, offset: Int) throws {
+        try run(["select-pane", "-t", "=\(session):.\(offset >= 0 ? "+" : "-")"])
+    }
+
+    /// session のカレント window の window_id (@n) を返す。移動後のバッジクリア対象の特定に使う。
+    func activeWindowID(session: String) throws -> String {
+        try run(["display-message", "-p", "-t", "=\(session):", "#{window_id}"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

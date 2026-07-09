@@ -58,7 +58,7 @@ enum TmuxFormat {
     }
 }
 
-/// Claude Code の Stop hook から `ntmux://stop?session=<name>&window=@n` で届く通知イベント。
+/// Claude Code の Stop hook から `noroshi://stop?session=<name>&window=@n` で届く通知イベント。
 struct StopEvent: Equatable {
     /// 発火元 tmux session 名。
     let sessionName: String
@@ -67,7 +67,7 @@ struct StopEvent: Equatable {
 
     // URL スキーム経由の入力だけを受け付けるバリデーションのため failable init にしている
     init?(url: URL) {
-        guard url.scheme == "ntmux",
+        guard url.scheme == "noroshi",
               url.host == "stop",
               let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
               let session = queryItems.first(where: { $0.name == "session" })?.value,
@@ -77,5 +77,48 @@ struct StopEvent: Equatable {
         else { return nil }
         sessionName = session
         windowID = window
+    }
+}
+
+/// Stop hook 由来の通知 1 件の受信記録。「最新の通知へジャンプ」(cmd+shift+n) の解決に使う。
+/// バッジ台帳 (windowID -> 未読数) とは別に、発生順を保持するために持つ。
+struct NotificationRecord: Equatable {
+    /// 通知が発火した window の window_id (@n)。
+    let windowID: String
+    /// 受信時刻。
+    let receivedAt: Date
+}
+
+/// session/window の移動先を計算する純粋ロジック。実 tmux に依存しないためユニットテスト可能。
+enum NoroshiNavigation {
+    /// 表示順 sessionNames の中で current から offset だけ移動した session 名を返す (末尾↔先頭で循環)。
+    /// current が nil または一覧に無い場合は先頭を返す。
+    static func adjacentSessionName(in sessionNames: [String], from current: String?, offset: Int) -> String? {
+        guard !sessionNames.isEmpty else { return nil }
+        guard let current, let currentIndex = sessionNames.firstIndex(of: current) else { return sessionNames.first }
+        let count = sessionNames.count
+        return sessionNames[((currentIndex + offset) % count + count) % count]
+    }
+
+    /// 表示順 sessionNames の displayIndex 番目 (0 始まり) の session 名。範囲外は nil。
+    static func sessionName(in sessionNames: [String], atDisplayIndex displayIndex: Int) -> String? {
+        sessionNames.indices.contains(displayIndex) ? sessionNames[displayIndex] : nil
+    }
+
+    /// 通知履歴 (古い順) とバッジ台帳から、最も新しく受信しかつ未読が残っている windowID を返す。
+    /// 同じ window が複数回通知されても、最新の受信を採用する。
+    static func latestUnreadWindowID(history: [NotificationRecord], badges: [String: Int]) -> String? {
+        history.last(where: { (badges[$0.windowID] ?? 0) > 0 })?.windowID
+    }
+
+    /// 保存済みの表示順 savedOrder と現存 session 名 currentNames をマージし、表示順を解決する。
+    /// - savedOrder のうち現存する session を保存順のまま先頭に並べる (消えた session は落とす)。
+    /// - savedOrder に無い新規 session は currentNames の順で末尾に足す。
+    /// - savedOrder に重複があっても先勝ちで 1 つに畳む。
+    static func resolvedSessionOrder(savedOrder: [String], currentNames: [String]) -> [String] {
+        let currentNameSet = Set(currentNames)
+        var seenNames = Set<String>()
+        let keptNames = savedOrder.filter { currentNameSet.contains($0) && seenNames.insert($0).inserted }
+        return keptNames + currentNames.filter { !seenNames.contains($0) }
     }
 }

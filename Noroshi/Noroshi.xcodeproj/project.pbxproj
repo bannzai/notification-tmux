@@ -16,37 +16,24 @@
 			containerPortal = 202025C52FFD4F1600247CCD /* Project object */;
 			proxyType = 1;
 			remoteGlobalIDString = 202025CC2FFD4F1600247CCD;
-			remoteInfo = NTMUX;
-		};
-		202025E72FFD4F1900247CCD /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 202025C52FFD4F1600247CCD /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 202025CC2FFD4F1600247CCD;
-			remoteInfo = NTMUX;
+			remoteInfo = Noroshi;
 		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		202025CD2FFD4F1600247CCD /* NTMUX.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NTMUX.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		202025DC2FFD4F1900247CCD /* NTMUXTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NTMUXTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
-		202025E62FFD4F1900247CCD /* NTMUXUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NTMUXUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		202025CD2FFD4F1600247CCD /* Noroshi.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Noroshi.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		202025DC2FFD4F1900247CCD /* NoroshiTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NoroshiTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
-		202025CF2FFD4F1600247CCD /* NTMUX */ = {
+		202025CF2FFD4F1600247CCD /* Noroshi */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = NTMUX;
+			path = Noroshi;
 			sourceTree = "<group>";
 		};
-		202025DF2FFD4F1900247CCD /* NTMUXTests */ = {
+		202025DF2FFD4F1900247CCD /* NoroshiTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
-			path = NTMUXTests;
-			sourceTree = "<group>";
-		};
-		202025E92FFD4F1900247CCD /* NTMUXUITests */ = {
-			isa = PBXFileSystemSynchronizedRootGroup;
-			path = NTMUXUITests;
+			path = NoroshiTests;
 			sourceTree = "<group>";
 		};
 /* End PBXFileSystemSynchronizedRootGroup section */
@@ -67,22 +54,14 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		202025E32FFD4F1900247CCD /* Frameworks */ = {
-			isa = PBXFrameworksBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
 		202025C42FFD4F1600247CCD = {
 			isa = PBXGroup;
 			children = (
-				202025CF2FFD4F1600247CCD /* NTMUX */,
-				202025DF2FFD4F1900247CCD /* NTMUXTests */,
-				202025E92FFD4F1900247CCD /* NTMUXUITests */,
+				202025CF2FFD4F1600247CCD /* Noroshi */,
+				202025DF2FFD4F1900247CCD /* NoroshiTests */,
 				202025CE2FFD4F1600247CCD /* Products */,
 			);
 			sourceTree = "<group>";
@@ -90,9 +69,8 @@
 		202025CE2FFD4F1600247CCD /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				202025CD2FFD4F1600247CCD /* NTMUX.app */,
-				202025DC2FFD4F1900247CCD /* NTMUXTests.xctest */,
-				202025E62FFD4F1900247CCD /* NTMUXUITests.xctest */,
+				202025CD2FFD4F1600247CCD /* Noroshi.app */,
+				202025DC2FFD4F1900247CCD /* NoroshiTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -100,9 +78,9 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
-		202025CC2FFD4F1600247CCD /* NTMUX */ = {
+		202025CC2FFD4F1600247CCD /* Noroshi */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 202025F02FFD4F1900247CCD /* Build configuration list for PBXNativeTarget "NTMUX" */;
+			buildConfigurationList = 202025F02FFD4F1900247CCD /* Build configuration list for PBXNativeTarget "Noroshi" */;
 			buildPhases = (
 				202025C92FFD4F1600247CCD /* Sources */,
 				202025CA2FFD4F1600247CCD /* Frameworks */,
@@ -113,19 +91,19 @@
 			dependencies = (
 			);
 			fileSystemSynchronizedGroups = (
-				202025CF2FFD4F1600247CCD /* NTMUX */,
+				202025CF2FFD4F1600247CCD /* Noroshi */,
 			);
-			name = NTMUX;
+			name = Noroshi;
 			packageProductDependencies = (
 				2020F0032FFD4F1900247CCD /* SwiftTerm */,
 			);
-			productName = NTMUX;
-			productReference = 202025CD2FFD4F1600247CCD /* NTMUX.app */;
+			productName = Noroshi;
+			productReference = 202025CD2FFD4F1600247CCD /* Noroshi.app */;
 			productType = "com.apple.product-type.application";
 		};
-		202025DB2FFD4F1900247CCD /* NTMUXTests */ = {
+		202025DB2FFD4F1900247CCD /* NoroshiTests */ = {
 			isa = PBXNativeTarget;
-			buildConfigurationList = 202025F32FFD4F1900247CCD /* Build configuration list for PBXNativeTarget "NTMUXTests" */;
+			buildConfigurationList = 202025F32FFD4F1900247CCD /* Build configuration list for PBXNativeTarget "NoroshiTests" */;
 			buildPhases = (
 				202025D82FFD4F1900247CCD /* Sources */,
 				202025D92FFD4F1900247CCD /* Frameworks */,
@@ -137,37 +115,14 @@
 				202025DE2FFD4F1900247CCD /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
-				202025DF2FFD4F1900247CCD /* NTMUXTests */,
+				202025DF2FFD4F1900247CCD /* NoroshiTests */,
 			);
-			name = NTMUXTests;
+			name = NoroshiTests;
 			packageProductDependencies = (
 			);
-			productName = NTMUXTests;
-			productReference = 202025DC2FFD4F1900247CCD /* NTMUXTests.xctest */;
+			productName = NoroshiTests;
+			productReference = 202025DC2FFD4F1900247CCD /* NoroshiTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
-		};
-		202025E52FFD4F1900247CCD /* NTMUXUITests */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = 202025F62FFD4F1900247CCD /* Build configuration list for PBXNativeTarget "NTMUXUITests" */;
-			buildPhases = (
-				202025E22FFD4F1900247CCD /* Sources */,
-				202025E32FFD4F1900247CCD /* Frameworks */,
-				202025E42FFD4F1900247CCD /* Resources */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-				202025E82FFD4F1900247CCD /* PBXTargetDependency */,
-			);
-			fileSystemSynchronizedGroups = (
-				202025E92FFD4F1900247CCD /* NTMUXUITests */,
-			);
-			name = NTMUXUITests;
-			packageProductDependencies = (
-			);
-			productName = NTMUXUITests;
-			productReference = 202025E62FFD4F1900247CCD /* NTMUXUITests.xctest */;
-			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -186,13 +141,9 @@
 						CreatedOnToolsVersion = 26.5;
 						TestTargetID = 202025CC2FFD4F1600247CCD;
 					};
-					202025E52FFD4F1900247CCD = {
-						CreatedOnToolsVersion = 26.5;
-						TestTargetID = 202025CC2FFD4F1600247CCD;
-					};
 				};
 			};
-			buildConfigurationList = 202025C82FFD4F1600247CCD /* Build configuration list for PBXProject "NTMUX" */;
+			buildConfigurationList = 202025C82FFD4F1600247CCD /* Build configuration list for PBXProject "Noroshi" */;
 			developmentRegion = en;
 			hasScannedForEncodings = 0;
 			knownRegions = (
@@ -209,9 +160,8 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
-				202025CC2FFD4F1600247CCD /* NTMUX */,
-				202025DB2FFD4F1900247CCD /* NTMUXTests */,
-				202025E52FFD4F1900247CCD /* NTMUXUITests */,
+				202025CC2FFD4F1600247CCD /* Noroshi */,
+				202025DB2FFD4F1900247CCD /* NoroshiTests */,
 			);
 		};
 /* End PBXProject section */
@@ -225,13 +175,6 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		202025DA2FFD4F1900247CCD /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-		202025E42FFD4F1900247CCD /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -255,25 +198,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
-		202025E22FFD4F1900247CCD /* Sources */ = {
-			isa = PBXSourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
 		202025DE2FFD4F1900247CCD /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
-			target = 202025CC2FFD4F1600247CCD /* NTMUX */;
+			target = 202025CC2FFD4F1600247CCD /* Noroshi */;
 			targetProxy = 202025DD2FFD4F1900247CCD /* PBXContainerItemProxy */;
-		};
-		202025E82FFD4F1900247CCD /* PBXTargetDependency */ = {
-			isa = PBXTargetDependency;
-			target = 202025CC2FFD4F1600247CCD /* NTMUX */;
-			targetProxy = 202025E72FFD4F1900247CCD /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
 
@@ -419,7 +350,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bannzai.NTMUX;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bannzai.Noroshi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -452,7 +383,7 @@
 					"@executable_path/../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bannzai.NTMUX;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bannzai.Noroshi;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -474,14 +405,14 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bannzai.NTMUXTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bannzai.NoroshiTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NTMUX.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NTMUX";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Noroshi.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Noroshi";
 			};
 			name = Debug;
 		};
@@ -495,59 +426,21 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				MACOSX_DEPLOYMENT_TARGET = 26.2;
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bannzai.NTMUXTests;
+				PRODUCT_BUNDLE_IDENTIFIER = com.bannzai.NoroshiTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NTMUX.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NTMUX";
-			};
-			name = Release;
-		};
-		202025F72FFD4F1900247CCD /* Debug */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TQPN82UBBY;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bannzai.NTMUXUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = NTMUX;
-			};
-			name = Debug;
-		};
-		202025F82FFD4F1900247CCD /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TQPN82UBBY;
-				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.bannzai.NTMUXUITests;
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				STRING_CATALOG_GENERATE_SYMBOLS = NO;
-				SWIFT_APPROACHABLE_CONCURRENCY = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
-				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
-				TEST_TARGET_NAME = NTMUX;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Noroshi.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Noroshi";
 			};
 			name = Release;
 		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		202025C82FFD4F1600247CCD /* Build configuration list for PBXProject "NTMUX" */ = {
+		202025C82FFD4F1600247CCD /* Build configuration list for PBXProject "Noroshi" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				202025EE2FFD4F1900247CCD /* Debug */,
@@ -556,7 +449,7 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		202025F02FFD4F1900247CCD /* Build configuration list for PBXNativeTarget "NTMUX" */ = {
+		202025F02FFD4F1900247CCD /* Build configuration list for PBXNativeTarget "Noroshi" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				202025F12FFD4F1900247CCD /* Debug */,
@@ -565,20 +458,11 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
-		202025F32FFD4F1900247CCD /* Build configuration list for PBXNativeTarget "NTMUXTests" */ = {
+		202025F32FFD4F1900247CCD /* Build configuration list for PBXNativeTarget "NoroshiTests" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				202025F42FFD4F1900247CCD /* Debug */,
 				202025F52FFD4F1900247CCD /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
-		202025F62FFD4F1900247CCD /* Build configuration list for PBXNativeTarget "NTMUXUITests" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				202025F72FFD4F1900247CCD /* Debug */,
-				202025F82FFD4F1900247CCD /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

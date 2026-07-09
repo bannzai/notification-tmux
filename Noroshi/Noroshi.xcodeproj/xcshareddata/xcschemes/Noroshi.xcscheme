@@ -15,9 +15,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "202025CC2FFD4F1600247CCD"
-               BuildableName = "NTMUX.app"
-               BlueprintName = "NTMUX"
-               ReferencedContainer = "container:NTMUX.xcodeproj">
+               BuildableName = "Noroshi.app"
+               BlueprintName = "Noroshi"
+               ReferencedContainer = "container:Noroshi.xcodeproj">
             </BuildableReference>
          </BuildActionEntry>
       </BuildActionEntries>
@@ -34,9 +34,9 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "202025DB2FFD4F1900247CCD"
-               BuildableName = "NTMUXTests.xctest"
-               BlueprintName = "NTMUXTests"
-               ReferencedContainer = "container:NTMUX.xcodeproj">
+               BuildableName = "NoroshiTests.xctest"
+               BlueprintName = "NoroshiTests"
+               ReferencedContainer = "container:Noroshi.xcodeproj">
             </BuildableReference>
          </TestableReference>
       </Testables>
@@ -56,9 +56,9 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "202025CC2FFD4F1600247CCD"
-            BuildableName = "NTMUX.app"
-            BlueprintName = "NTMUX"
-            ReferencedContainer = "container:NTMUX.xcodeproj">
+            BuildableName = "Noroshi.app"
+            BlueprintName = "Noroshi"
+            ReferencedContainer = "container:Noroshi.xcodeproj">
          </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>

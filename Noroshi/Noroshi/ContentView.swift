@@ -19,5 +19,10 @@ struct ContentView: View {
                 )
             }
         }
+        .overlay {
+            if appState.isPalettePresented {
+                CommandPaletteView()
+            }
+        }
     }
 }
