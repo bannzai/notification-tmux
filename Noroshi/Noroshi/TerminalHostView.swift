@@ -2,6 +2,88 @@ import AppKit
 import SwiftTerm
 import SwiftUI
 
+/// tmux のようにマウスレポートを有効化した相手へ、SwiftTerm 1.13.0 が取りこぼす
+/// ホイールスクロールと buttonEventTracking (DECSET 1002) のドラッグ motion を SGR レポートとして送出する
+/// terminal view。SwiftTerm 本体 (checkouts) は改変不可で、かつ TerminalView の
+/// scrollWheel / mouseDragged は `public`(非 `open`) override のため別モジュールから再 override できない。
+/// そのため TerminalSessionManager 側の NSEvent local monitor から本 view の public メソッドを呼んで補う。
+///
+/// SwiftTerm 1.13.0 の取りこぼし箇所 (Mac/MacTerminalView.swift):
+/// - scrollWheel はマウスモードを一切見ずに常にローカルスクロールバックを操作し、レポートを送らない。
+///   tmux 側にホイールが届かず copy-mode スクロールが起きない。
+/// - mouseDragged は `mouseMode.sendMotionEvent()` (anyEvent=1003 のみ true) が偽だと早期 return し、
+///   buttonEventTracking (1002) のドラッグ motion を送らない。tmux の pane 境界ドラッグ (resize) が効かない。
+final class MouseReportingTerminalView: LocalProcessTerminalView {
+    /// 精密スクロール (トラックパッド) の端数を貯め、セル高ごとに 1 tick へ量子化するための累積値。
+    private var scrollAccumulator: CGFloat = 0
+
+    /// attach 先がマウスレポート (DECSET 1000/1002/1003) を要求している状態か。
+    /// false のときはローカルスクロールバックへ委ねるべきで、ホイールレポートは送らない。
+    var isMouseReportingActive: Bool {
+        allowMouseReporting && getTerminal().mouseMode != .off
+    }
+
+    /// buttonEventTracking (1002) で、SwiftTerm が送らないドラッグ motion をこちらで補う必要がある状態か。
+    var wantsDragMotionReport: Bool {
+        allowMouseReporting && getTerminal().mouseMode == .buttonEventTracking
+    }
+
+    /// スクロールバックへ委ねる直前に累積端数を捨てる。次にレポートへ戻ったとき古い端数を持ち越さないため。
+    func resetScrollAccumulator() {
+        scrollAccumulator = 0
+    }
+
+    /// ホイールイベントを SGR マウスレポートとして送る。セル高ごとに 1 tick を送出する。
+    func reportScroll(with event: NSEvent) {
+        let cell = cellSize()
+        // 行ベース (マウスホイール) は 1 delta ≒ 1 行、精密 (トラックパッド) は移動量 (pt) をセル高で割って行数化する。
+        scrollAccumulator += event.hasPreciseScrollingDeltas ? event.scrollingDeltaY : event.deltaY * cell.height
+        let ticks = Int(scrollAccumulator / cell.height)
+        guard ticks != 0 else { return }
+        scrollAccumulator -= CGFloat(ticks) * cell.height
+        // xterm はホイールを button press として報告する (motion ではない)。上方向 = button4 (64), 下方向 = button5 (65)。
+        let flags = getTerminal().encodeButton(
+            button: ticks > 0 ? 4 : 5,
+            release: false,
+            shift: event.modifierFlags.contains(.shift),
+            meta: event.modifierFlags.contains(.option),
+            control: event.modifierFlags.contains(.control))
+        let hit = gridPosition(for: event, cell: cell)
+        for _ in 0 ..< abs(ticks) {
+            getTerminal().sendEvent(buttonFlags: flags, x: hit.col, y: hit.row, pixelX: 0, pixelY: 0)
+        }
+    }
+
+    /// ドラッグ中の位置を SGR マウス motion レポートとして送る。pane 境界 resize などの button-motion 追従に使う。
+    func reportDragMotion(with event: NSEvent) {
+        let hit = gridPosition(for: event, cell: cellSize())
+        getTerminal().sendMotion(
+            buttonFlags: getTerminal().encodeButton(
+                button: event.buttonNumber,
+                release: false,
+                shift: event.modifierFlags.contains(.shift),
+                meta: event.modifierFlags.contains(.option),
+                control: event.modifierFlags.contains(.control)),
+            x: hit.col, y: hit.row, pixelX: 0, pixelY: 0)
+    }
+
+    /// 表示中フォントの 1 セル寸法 (pt)。getOptimalFrameSize() は width=cell*cols+scroller幅 / height=cell*rows を返すため逆算する。
+    private func cellSize() -> CGSize {
+        let optimal = getOptimalFrameSize()
+        return CGSize(
+            width: (optimal.width - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)) / CGFloat(getTerminal().cols),
+            height: optimal.height / CGFloat(getTerminal().rows))
+    }
+
+    /// event の位置を可視画面の 0-based セル座標へ変換する。SwiftTerm の calculateMouseHit と同じ式。
+    private func gridPosition(for event: NSEvent, cell: CGSize) -> (col: Int, row: Int) {
+        let point = convert(event.locationInWindow, from: nil)
+        return (
+            col: min(max(0, Int(point.x / cell.width)), getTerminal().cols - 1),
+            row: min(max(0, Int((frame.height - point.y) / cell.height)), getTerminal().rows - 1))
+    }
+}
+
 /// 表示中の session だけを attach する単一 attach 方式の terminal 管理 (issue #6 案 A)。
 /// 常時 attach client は最大 1 本。session 切替時に直前の view を terminate して破棄し、新しい session に attach する。
 /// 非表示 view を生かし続けないことで、attach client / VT パース / スクロールバックの多重コストを避ける。
@@ -13,9 +95,11 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     /// 現在 attach 中の session 名。単一 attach なので最大 1。
     private var currentSessionName: String?
     /// 現在 attach 中の terminal view。
-    private var currentView: LocalProcessTerminalView?
+    private var currentView: MouseReportingTerminalView?
     /// Ghostty config 由来の配色。起動時に一度読み、メニュー「テーマを再読み込み」で更新する。config が無ければ nil。
     private var theme = GhosttyTheme.load()
+    /// ホイール / ドラッグを横取りして tmux へマウスレポートを送るための local event monitor。生成後は最大 1 本。
+    private var mouseMonitor: Any?
 
     /// session に attach した terminal view を返す。別 session が表示中なら、その view を破棄してから新規 attach する。
     /// 同じ session の再要求では既存 view をそのまま返す (再 attach しない)。
@@ -32,10 +116,11 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         return view
     }
 
-    /// session に attach する LocalProcessTerminalView を 1 つ生成する。
+    /// session に attach する terminal view を 1 つ生成する。
     /// terminal view の生成箇所はこの 1 メソッドに集約している (後工程のテーマ適用の差し込み点)。
-    private func makeTerminalView(for sessionName: String) -> LocalProcessTerminalView {
-        let view = LocalProcessTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+    private func makeTerminalView(for sessionName: String) -> MouseReportingTerminalView {
+        installMouseMonitorIfNeeded()
+        let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         view.processDelegate = self
         // `=` プレフィックスで session 名の完全一致を強制 (前方一致による誤 attach を防ぐ)
         view.startProcess(
@@ -53,6 +138,45 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     func reloadTheme() {
         theme = GhosttyTheme.load()
         if let view = currentView { theme?.apply(to: view) }
+    }
+
+    /// ホイール / 左ドラッグを横取りする local event monitor を 1 度だけ張る。生成済みなら何もしない (冪等)。
+    /// SwiftTerm の scrollWheel / mouseDragged は別モジュールから再 override できないため、
+    /// view へ配送される前段でイベントを掴んでマウスレポート送出とローカル処理の抑止を行う。
+    private func installMouseMonitorIfNeeded() {
+        guard mouseMonitor == nil else { return }
+        // NSEvent は Sendable でないため、MainActor 境界は Bool (消費したか) だけを跨がせ、
+        // event / nil の選択は境界の外で行う。monitor は常に main スレッドで発火するので assumeIsolated は安全。
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged]) { event in
+            MainActor.assumeIsolated {
+                TerminalSessionManager.shared.reportMouseEventIfHandled(event)
+            } ? nil : event
+        }
+    }
+
+    /// 表示中 terminal view の上で起きたホイール / 左ドラッグならマウスレポートを送り、消費した (true) を返す。
+    /// 対象外なら false を返し、呼び出し側でイベントを既定処理へ通す。
+    private func reportMouseEventIfHandled(_ event: NSEvent) -> Bool {
+        guard let view = currentView,
+              event.window === view.window,
+              view.bounds.contains(view.convert(event.locationInWindow, from: nil))
+        else { return false }
+
+        switch event.type {
+        case .scrollWheel:
+            guard view.isMouseReportingActive else {
+                view.resetScrollAccumulator()
+                return false
+            }
+            view.reportScroll(with: event)
+            return true
+        case .leftMouseDragged:
+            guard view.wantsDragMotionReport else { return false }
+            view.reportDragMotion(with: event)
+            return true
+        default:
+            return false
+        }
     }
 
     // MARK: - LocalProcessTerminalViewDelegate
