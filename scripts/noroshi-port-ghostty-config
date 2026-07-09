@@ -1,0 +1,59 @@
+#!/bin/bash
+# ~/.config/ghostty/config から Noroshi が理解するキーだけを抽出して
+# ~/.config/noroshi/config を生成する移植スクリプト。
+# Noroshi は Ghostty と同じ key=value 形式の独自 config を持つ (documents/adr/0004 参照)。
+# 元の ghostty config には一切触れず、理解できるキーだけをコピーする。
+# ghostty config が無い・出力先が既にある等の場合は、壊さず安全に終了する (冪等・安全)。
+set -u
+
+force=0
+for arg in "$@"; do
+  case "$arg" in
+    --force) force=1 ;;
+    -h | --help)
+      echo "usage: noroshi-port-ghostty-config [--force]"
+      echo "  ~/.config/ghostty/config から Noroshi が理解するキーを ~/.config/noroshi/config へ移植する"
+      echo "  --force: 出力先が既に存在しても上書きする"
+      exit 0
+      ;;
+    *)
+      echo "unknown argument: $arg" >&2
+      exit 1
+      ;;
+  esac
+done
+
+config_home="${XDG_CONFIG_HOME:-$HOME/.config}"
+src="$config_home/ghostty/config"
+dst="$config_home/noroshi/config"
+
+# 移植元が無ければ何もしない (安全に終了)。
+if [ ! -f "$src" ]; then
+  echo "ghostty config が見つかりません: $src" >&2
+  exit 1
+fi
+
+# 出力先が既にある場合は --force 無しでは上書きしない (冪等・安全)。
+if [ -f "$dst" ] && [ "$force" -eq 0 ]; then
+  echo "既に存在します: $dst (上書きするには --force)" >&2
+  exit 1
+fi
+
+mkdir -p "$(dirname "$dst")"
+
+# Noroshi が理解するキーだけを抽出する:
+#   theme / background / foreground / cursor-color / selection-background / palette / font-family / font-size
+# 正規表現は「行頭の任意空白 + キー + 任意空白 + =」にマッチさせる。
+# 該当キーが 1 つも無くても失敗にしない (|| true)。
+tmp="$(mktemp)"
+{
+  echo "# このファイルは noroshi-port-ghostty-config が"
+  echo "#   $src"
+  echo "# から Noroshi が理解するキーだけを移植して生成した。"
+  echo "# 形式は Ghostty config 互換 (key = value)。"
+  grep -E '^[[:space:]]*(theme|background|foreground|cursor-color|selection-background|palette|font-family|font-size)[[:space:]]*=' "$src" || true
+} >"$tmp"
+
+mv "$tmp" "$dst"
+echo "生成しました: $dst"
+exit 0
