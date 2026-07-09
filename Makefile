@@ -1,12 +1,12 @@
-XCODEPROJ := NTMUX/NTMUX.xcodeproj
-SCHEME := NTMUX
+XCODEPROJ := Noroshi/Noroshi.xcodeproj
+SCHEME := Noroshi
 CONFIGURATION := Debug
 DERIVED_DATA := tmp/DerivedData
-APP := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/NTMUX.app
+APP := $(DERIVED_DATA)/Build/Products/$(CONFIGURATION)/Noroshi.app
 
 .PHONY: run build test clean
 
-# ビルドして NTMUX.app を起動する
+# ビルドして Noroshi.app を起動する
 run: build
 	open $(APP)
 
