@@ -42,9 +42,10 @@ struct SidebarView: View {
                     }
                 }
             }
-            .onMove { source, destination in
+            // フィルタ中は表示 index と全体順 (displaySessionNames) がずれ保存順が壊れるため、並べ替えを無効化する。
+            .onMove(perform: isFiltering ? nil : { source, destination in
                 appState.moveSessions(fromOffsets: source, toOffset: destination)
-            }
+            })
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom) {
