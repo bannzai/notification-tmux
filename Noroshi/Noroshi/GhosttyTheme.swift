@@ -19,6 +19,8 @@ struct GhosttyTheme {
     let palette: [Int: SwiftTerm.Color]
     /// フォントファミリ (`font-family`)。config レベルで読む (theme ファイル内対応は不要)。未指定なら nil。
     let fontFamily: String?
+    /// 通常文字に使うフォントスタイル (`font-style`)。フォントが公開するスタイル名。未指定なら nil。
+    let fontStyle: String?
     /// フォントサイズ (`font-size`、pt)。未指定なら nil。
     let fontSize: Double?
 
@@ -85,6 +87,7 @@ struct GhosttyTheme {
             selectionForeground: override.selectionForeground ?? selectionForeground,
             palette: palette.merging(override.palette) { _, overrideColor in overrideColor },
             fontFamily: override.fontFamily ?? fontFamily,
+            fontStyle: override.fontStyle ?? fontStyle,
             fontSize: override.fontSize ?? fontSize
         )
     }
@@ -97,6 +100,7 @@ struct GhosttyTheme {
         var background, foreground, cursorColor, selectionBackground, selectionForeground: SwiftTerm.Color?
         var palette: [Int: SwiftTerm.Color] = [:]
         var fontFamily: String?
+        var fontStyle: String?
         var fontSize: Double?
         var themeRef: String?
         for rawLine in configText.split(separator: "\n", omittingEmptySubsequences: false) {
@@ -110,15 +114,16 @@ struct GhosttyTheme {
             case "selection-foreground": selectionForeground = parseColor(value) ?? selectionForeground
             case "palette":
                 if let entry = parsePaletteEntry(value) { palette[entry.index] = entry.color }
-            // font-family / font-size は Ghostty と同名キー。空値・非数値は未設定のまま無視する。
+            // フォント設定は Ghostty と同名キー。空値・非数値は未設定のまま無視する。
             case "font-family": if !value.isEmpty { fontFamily = value }
+            case "font-style": if !value.isEmpty { fontStyle = value }
             case "font-size": if let size = Double(value) { fontSize = size }
             default: break
             }
         }
         return (GhosttyTheme(background: background, foreground: foreground, cursorColor: cursorColor,
                              selectionBackground: selectionBackground, selectionForeground: selectionForeground,
-                             palette: palette, fontFamily: fontFamily, fontSize: fontSize),
+                             palette: palette, fontFamily: fontFamily, fontStyle: fontStyle, fontSize: fontSize),
                 themeRef)
     }
 

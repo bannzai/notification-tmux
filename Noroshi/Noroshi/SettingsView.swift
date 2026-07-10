@@ -22,6 +22,15 @@ struct SettingsView: View {
                         Text(family).tag(family)
                     }
                 }
+                Picker("文字の太さ", selection: Binding(
+                    get: { model.fontStyle },
+                    set: { model.setFontStyle($0) }
+                )) {
+                    Text("フォント既定").tag(SettingsModel.unsetFontStyle)
+                    ForEach(SettingsModel.fontStyleOptions, id: \.self) { style in
+                        Text(style).tag(style)
+                    }
+                }
                 Stepper(value: Binding(
                     get: { model.fontSize },
                     set: { model.setFontSize($0) }
@@ -80,6 +89,8 @@ final class SettingsModel: ObservableObject {
 
     /// フォントファミリ。空文字 = システム既定 (font-family 未設定)。
     @Published var fontFamily: String
+    /// 通常文字のフォントスタイル。空文字 = フォント既定 (font-style 未設定)。
+    @Published var fontStyle: String
     /// フォントサイズ (pt)。未設定時は既定サイズを表示する。
     @Published var fontSize: Double
     /// テーマ名。空文字 = 未設定。
@@ -98,7 +109,9 @@ final class SettingsModel: ObservableObject {
 
     /// 未設定を表すセンチネル値。
     static let unsetFontFamily = ""
+    static let unsetFontStyle = ""
     static let unsetTheme = ""
+    static let fontStyleOptions = ["Regular", "Medium", "Semibold", "Bold"]
     /// font-size 未設定時に表示する既定サイズ (SwiftTerm の既定 = システムフォントサイズ)。
     static let defaultFontSize = Double(NSFont.systemFontSize)
     /// Stepper の範囲。
@@ -117,6 +130,7 @@ final class SettingsModel: ObservableObject {
             prefersDark: Self.systemPrefersDark()
         )
         fontFamily = configTheme.fontFamily ?? Self.unsetFontFamily
+        fontStyle = configTheme.fontStyle ?? Self.unsetFontStyle
         fontSize = configTheme.fontSize ?? Self.defaultFontSize
         themeName = themeRef ?? Self.unsetTheme
         background = Self.color(resolved.background) ?? .black
@@ -136,6 +150,16 @@ final class SettingsModel: ObservableObject {
             write(set: [:], remove: ["font-family"])
         } else {
             write(set: ["font-family": new], remove: [])
+        }
+    }
+
+    /// 通常文字の太さを変更する。フォント既定を選んだら font-style キーを削除する。
+    func setFontStyle(_ new: String) {
+        fontStyle = new
+        if new.isEmpty {
+            write(set: [:], remove: ["font-style"])
+        } else {
+            write(set: ["font-style": new], remove: [])
         }
     }
 
