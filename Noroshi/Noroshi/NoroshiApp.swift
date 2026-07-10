@@ -80,6 +80,13 @@ struct NavigationCommands: Commands {
 
             Divider()
 
+            Button("サイドバーにフォーカス") { appState.requestFocus(.sidebar) }
+                .keyboardShortcut("s", modifiers: [.command, .option])
+            Button("ターミナルにフォーカス") { appState.requestFocus(.terminal) }
+                .keyboardShortcut("t", modifiers: [.command, .option])
+
+            Divider()
+
             Button("次の window") { appState.moveWindow(1) }
                 .keyboardShortcut("]", modifiers: [.command, .shift])
             Button("前の window") { appState.moveWindow(-1) }

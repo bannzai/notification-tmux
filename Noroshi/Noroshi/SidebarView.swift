@@ -5,8 +5,13 @@ import SwiftUI
 /// session はドラッグ&ドロップで並べ替えられ、順序は AppState (UserDefaults) に永続化される。
 struct SidebarView: View {
     @EnvironmentObject var appState: AppState
-    /// 折りたたみ中の session 名。未収録 = 展開扱いで、既定はすべて展開し従来どおり window を常時表示する。
-    @State private var collapsedSessionNames: Set<String> = []
+    @FocusState private var focusedItem: FocusedItem?
+
+    private enum FocusedItem: Hashable {
+        case session(String)
+        case window(String)
+        case filter
+    }
 
     /// フィルタ (テキスト or 通知) が有効かどうか。有効時は一致 window が隠れないよう DisclosureGroup を強制展開する。
     private var isFiltering: Bool {
@@ -28,10 +33,11 @@ struct SidebarView: View {
                         WindowRow(
                             window: window,
                             badge: appState.badges[window.id] ?? 0,
-                            isSelected: window.isActive && session.name == appState.selectedSessionName
+                            isSelected: window.id == appState.selectedWindowID
                         ) {
                             appState.open(window: window)
                         }
+                        .focused($focusedItem, equals: .window(window.id))
                     }
                 } label: {
                     SessionHeader(
@@ -39,7 +45,16 @@ struct SidebarView: View {
                         badge: appState.badgeCount(for: session),
                         isSelected: session.name == appState.selectedSessionName
                     ) {
-                        appState.selectedSessionName = session.name
+                        appState.selectSession(named: session.name)
+                    }
+                    .focused($focusedItem, equals: .session(session.name))
+                    .onKeyPress(.leftArrow) {
+                        appState.setSessionExpanded(session.name, isExpanded: false)
+                        return .handled
+                    }
+                    .onKeyPress(.rightArrow) {
+                        appState.setSessionExpanded(session.name, isExpanded: true)
+                        return .handled
                     }
                     .contextMenu {
                         Button("サイドバーから削除", role: .destructive) {
@@ -66,6 +81,11 @@ struct SidebarView: View {
                 filterBar
             }
         }
+        .onChange(of: appState.focusRequest) { _, request in
+            guard request?.target == .sidebar else { return }
+            focusedItem = appState.selectedSessionName.map(FocusedItem.session)
+                ?? appState.displaySessionNames.first.map(FocusedItem.session)
+        }
     }
 
     /// Xcode のファイルナビゲータ風のフィルタバー。虫眼鏡 + 入力欄 + クリアボタン + 通知フィルタトグル。
@@ -77,6 +97,7 @@ struct SidebarView: View {
             TextField("フィルタ", text: $appState.sidebarQuery)
                 .textFieldStyle(.plain)
                 .font(.caption)
+                .focused($focusedItem, equals: .filter)
             if !appState.sidebarQuery.isEmpty {
                 Button {
                     appState.sidebarQuery = ""
@@ -121,13 +142,9 @@ struct SidebarView: View {
     /// 非フィルタ時は collapsedSessionNames に無ければ展開扱い。
     private func expansionBinding(for sessionName: String) -> Binding<Bool> {
         Binding(
-            get: { isFiltering || !collapsedSessionNames.contains(sessionName) },
+            get: { isFiltering || !appState.collapsedSessionNames.contains(sessionName) },
             set: { isExpanded in
-                if isExpanded {
-                    collapsedSessionNames.remove(sessionName)
-                } else {
-                    collapsedSessionNames.insert(sessionName)
-                }
+                appState.setSessionExpanded(sessionName, isExpanded: isExpanded)
             }
         )
     }
