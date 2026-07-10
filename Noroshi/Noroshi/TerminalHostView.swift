@@ -288,6 +288,16 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         return view
     }
 
+    /// 表示コンテナが破棄されたとき、そのコンテナ内の現行 terminal を終了して attach を手放す。
+    /// 別コンテナへ移動済みの view や再度の呼び出しでは何もしない (冪等)。
+    func detachTerminal(from container: NSView) {
+        guard let view = currentView, view.superview === container else { return }
+        view.terminate()
+        view.removeFromSuperview()
+        currentView = nil
+        currentSessionName = nil
+    }
+
     /// session に attach する terminal view を 1 つ生成する。
     /// terminal view の生成箇所はこの 1 メソッドに集約している (後工程のテーマ適用の差し込み点)。
     private func makeTerminalView(for sessionName: String) -> MouseReportingTerminalView {
@@ -406,6 +416,11 @@ struct TerminalHostView: NSViewRepresentable {
 
     func updateNSView(_ container: NSView, context: Context) {
         install(on: container)
+    }
+
+    /// session 未選択画面へ切り替わる際、非表示の tmux attach を残さない。
+    static func dismantleNSView(_ container: NSView, coordinator: ()) {
+        TerminalSessionManager.shared.detachTerminal(from: container)
     }
 
     /// sessionName の terminal view をコンテナに取り付け、新規取り付け時だけフォーカスを当てる。

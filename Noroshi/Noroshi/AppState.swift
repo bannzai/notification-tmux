@@ -9,14 +9,15 @@ final class AppState: ObservableObject {
     /// 通知履歴の保持上限。超えた分は古いものから捨てる (メモリのみ)。
     static let notificationHistoryLimit = 1000
 
-    /// session の表示順を永続化する UserDefaults キー。
-    private static let sessionOrderDefaultsKey = "noroshi.sessionOrder"
+    /// サイドバーへ追加した session 名と表示順を永続化する UserDefaults キー。
+    /// 以前の全 session 自動追加用キーとは分け、初回は空のサイドバーから明示的に選べるようにする。
+    private static let sidebarSessionNamesDefaultsKey = "noroshi.sidebarSessionNames"
 
     /// tmux から取得した session 一覧 (tmux の list-sessions 順)。表示順は displaySessions が解決する。
     @Published private(set) var sessions: [TmuxSession] = []
-    /// ユーザーが指定した session の表示順 (session 名の配列)。UserDefaults に永続化する。
-    /// 実際の表示に使う順序は displaySessionNames が現存 session とマージして解決する。
-    @Published private(set) var sessionOrder: [String]
+    /// ユーザーがサイドバーへ追加した session 名 (表示順)。UserDefaults に永続化する。
+    /// 消えた session 名も残し、同名 session が再作成されたら再表示する。
+    @Published private(set) var sidebarSessionNames: [String]
     /// windowID -> 未読数。Stop イベントで加算し、window を開いたらクリアする。
     @Published private(set) var badges: [String: Int] = [:]
     /// terminal を表示中の session 名。nil なら未選択。
@@ -34,25 +35,34 @@ final class AppState: ObservableObject {
     private var notifications: [NotificationRecord] = []
     /// tmux CLI ラッパ。
     private let client: TmuxClient
+    /// サイドバーへ追加した session 名の保存先。
+    private let defaults: UserDefaults
     /// 一覧ポーリングのループ。
     private var pollTask: Task<Void, Never>?
 
     // テストからダミー binaryPath の client を注入するために定義している
-    init(client: TmuxClient = TmuxClient()) {
+    init(client: TmuxClient = TmuxClient(), defaults: UserDefaults = .standard) {
         self.client = client
-        self.sessionOrder = UserDefaults.standard.stringArray(forKey: Self.sessionOrderDefaultsKey) ?? []
+        self.defaults = defaults
+        self.sidebarSessionNames = defaults.stringArray(forKey: Self.sidebarSessionNamesDefaultsKey) ?? []
     }
 
     /// サイドバー・cmd+数字・session 隣接移動が共通で使う表示順の session 名。
-    /// 保存順 (sessionOrder) を現存 session とマージして解決する。順序解決はこの 1 箇所に集約する。
+    /// 追加済みの保存順から、現存していて表示できる session 名だけを解決する。
     var displaySessionNames: [String] {
-        NoroshiNavigation.resolvedSessionOrder(savedOrder: sessionOrder, currentNames: sessions.map(\.name))
+        NoroshiNavigation.displayedSessionNames(savedOrder: sidebarSessionNames, currentNames: sessions.map(\.name))
     }
 
     /// 表示順に並べ替えた session。サイドバーはこれを列挙する。
     var displaySessions: [TmuxSession] {
         let sessionsByName = Dictionary(uniqueKeysWithValues: sessions.map { ($0.name, $0) })
         return displaySessionNames.compactMap { sessionsByName[$0] }
+    }
+
+    /// picker に並べる未追加の現存 session。tmux の一覧順を保つ。
+    var availableSessions: [TmuxSession] {
+        let addedNames = Set(sidebarSessionNames)
+        return sessions.filter { !addedNames.contains($0.name) }
     }
 
     /// サイドバーが実際に列挙する session。表示順の displaySessions にフィルタ (テキスト + 通知) を適用する。
@@ -72,18 +82,40 @@ final class AppState: ObservableObject {
     func moveSessions(fromOffsets source: IndexSet, toOffset destination: Int) {
         var reordered = displaySessionNames
         reordered.move(fromOffsets: source, toOffset: destination)
-        sessionOrder = reordered
-        UserDefaults.standard.set(reordered, forKey: Self.sessionOrderDefaultsKey)
+        // 消えていて現在は表示できない session 名を末尾に残し、復活時に選択状態を失わないようにする。
+        let hiddenNames = sidebarSessionNames.filter { !reordered.contains($0) }
+        saveSidebarSessionNames(reordered + hiddenNames)
     }
 
-    /// 現存 session に合わせて保存順を掃除・追記し、変化があれば永続化する。
-    /// server 停止で一時的に session が空になった時に順序を失わないよう、session が空の間は掃除しない。
-    private func syncSessionOrder() {
-        guard !sessions.isEmpty else { return }
-        let resolved = displaySessionNames
-        guard resolved != sessionOrder else { return }
-        sessionOrder = resolved
-        UserDefaults.standard.set(resolved, forKey: Self.sessionOrderDefaultsKey)
+    /// picker で選んだ session をサイドバー末尾へ追加して保存する。追加済みなら何もしない (冪等)。
+    func addSessionToSidebar(_ sessionName: String) {
+        guard sessions.contains(where: { $0.name == sessionName }),
+              !sidebarSessionNames.contains(sessionName) else { return }
+        saveSidebarSessionNames(sidebarSessionNames + [sessionName])
+        if selectedSessionName == nil {
+            selectedSessionName = sessionName
+        }
+    }
+
+    /// session をサイドバーから外して保存する。未追加なら何もしない (冪等)。
+    func removeSessionFromSidebar(_ sessionName: String) {
+        let updated = sidebarSessionNames.filter { $0 != sessionName }
+        guard updated != sidebarSessionNames else { return }
+        if let removedSession = sessions.first(where: { $0.name == sessionName }) {
+            let removedWindowIDs = Set(removedSession.windows.map(\.id))
+            badges = badges.filter { !removedWindowIDs.contains($0.key) }
+            updateDockBadge()
+        }
+        saveSidebarSessionNames(updated)
+        if selectedSessionName == sessionName {
+            selectedSessionName = displaySessionNames.first
+        }
+    }
+
+    /// 追加済み session 名をメモリと UserDefaults へ同時に反映する。
+    private func saveSidebarSessionNames(_ names: [String]) {
+        sidebarSessionNames = names
+        defaults.set(names, forKey: Self.sidebarSessionNamesDefaultsKey)
     }
 
     /// session/window 一覧のポーリングを開始する。多重起動しない (冪等)。
@@ -104,13 +136,13 @@ final class AppState: ObservableObject {
             let fetched = try await Task.detached(priority: .utility) { try client.fetchSessions() }.value
             // 変化が無い時は再代入せず、2 秒ポーリング由来の不要な再描画 (terminal のフォーカス奪取等) を避ける。
             if fetched != sessions { sessions = fetched }
-            syncSessionOrder()
             lastError = nil
             let alive = Set(fetched.flatMap(\.windows).map(\.id))
             badges = badges.filter { alive.contains($0.key) }
             // 未選択、または選択中の session が消えた (kill 等) 場合は表示順の先頭にフォールバックする。
             // これが「消えた session への再 attach ループ」を止めるガード (単一 attach の TerminalSessionManager と対で機能する)。
-            if selectedSessionName == nil || !fetched.contains(where: { $0.name == selectedSessionName }) {
+            let selectedSessionIsAvailable = selectedSessionName.map { displaySessionNames.contains($0) } ?? false
+            if !selectedSessionIsAvailable {
                 selectedSessionName = displaySessionNames.first
             }
             updateDockBadge()
@@ -128,8 +160,9 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Stop hook 由来のイベントを適用し、該当 window の未読数を 1 増やして履歴に記録する。
+    /// 追加済み session の Stop hook イベントだけを適用し、該当 window の未読数を 1 増やして履歴に記録する。
     func apply(event: StopEvent) {
+        guard sidebarSessionNames.contains(event.sessionName) else { return }
         badges[event.windowID, default: 0] += 1
         notifications.append(NotificationRecord(windowID: event.windowID, receivedAt: Date()))
         if notifications.count > Self.notificationHistoryLimit {
@@ -217,7 +250,7 @@ final class AppState: ObservableObject {
     /// 該当 window が現在の一覧に存在しない場合は何もしない。
     func openLatestNotified() {
         guard let windowID = NoroshiNavigation.latestUnreadWindowID(history: notifications, badges: badges),
-              let window = sessions.flatMap(\.windows).first(where: { $0.id == windowID }) else { return }
+              let window = displaySessions.flatMap(\.windows).first(where: { $0.id == windowID }) else { return }
         open(window: window)
     }
 

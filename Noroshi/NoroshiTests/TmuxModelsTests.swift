@@ -61,13 +61,30 @@ final class TmuxModelsTests: XCTestCase {
 
     @MainActor
     func testBadgeApplyAndClear() throws {
-        let state = AppState(client: TmuxClient(binaryPath: "/usr/bin/false"))
+        let suiteName = "TmuxModelsTests.testBadgeApplyAndClear.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(["Focus"], forKey: "noroshi.sidebarSessionNames")
+        let state = AppState(client: TmuxClient(binaryPath: "/usr/bin/false"), defaults: defaults)
         let event = try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Focus&window=@18"))))
         state.apply(event: event)
         state.apply(event: event)
         XCTAssertEqual(state.badges["@18"], 2)
         state.clearBadge(windowID: "@18")
         XCTAssertNil(state.badges["@18"])
+    }
+
+    @MainActor
+    func testBadgeIgnoresSessionNotAddedToSidebar() throws {
+        let suiteName = "TmuxModelsTests.testBadgeIgnoresSessionNotAddedToSidebar.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let state = AppState(client: TmuxClient(binaryPath: "/usr/bin/false"), defaults: defaults)
+        let event = try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Hidden&window=@19"))))
+
+        state.apply(event: event)
+
+        XCTAssertNil(state.badges["@19"])
     }
 
     func testLatestUnreadWindowID() {
@@ -114,36 +131,36 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertNil(NoroshiNavigation.sessionName(in: names, atDisplayIndex: -1))
     }
 
-    func testResolvedSessionOrder() {
-        // 保存順を保ちつつ、新規 session (D) を末尾へ足す
+    func testDisplayedSessionNames() {
+        // 追加済み session だけを保存順で返し、未追加の新規 session (D) は自動追加しない
         XCTAssertEqual(
-            NoroshiNavigation.resolvedSessionOrder(savedOrder: ["C", "A", "B"], currentNames: ["A", "B", "C", "D"]),
-            ["C", "A", "B", "D"]
+            NoroshiNavigation.displayedSessionNames(savedOrder: ["C", "A", "B"], currentNames: ["A", "B", "C", "D"]),
+            ["C", "A", "B"]
         )
-        // 消えた session (X) は結果から落とす
+        // 消えた session (X) は表示結果から落とす
         XCTAssertEqual(
-            NoroshiNavigation.resolvedSessionOrder(savedOrder: ["X", "A", "B"], currentNames: ["A", "B"]),
+            NoroshiNavigation.displayedSessionNames(savedOrder: ["X", "A", "B"], currentNames: ["A", "B"]),
             ["A", "B"]
         )
-        // 保存順が空なら現存順そのまま
+        // 保存順が空なら、現存 session があっても空
         XCTAssertEqual(
-            NoroshiNavigation.resolvedSessionOrder(savedOrder: [], currentNames: ["A", "B"]),
-            ["A", "B"]
+            NoroshiNavigation.displayedSessionNames(savedOrder: [], currentNames: ["A", "B"]),
+            []
         )
-        // 現存が空なら空 (server 停止時に順序を失わない掃除抑止は AppState 側の責務)
+        // 現存が空なら空
         XCTAssertEqual(
-            NoroshiNavigation.resolvedSessionOrder(savedOrder: ["A", "B"], currentNames: []),
+            NoroshiNavigation.displayedSessionNames(savedOrder: ["A", "B"], currentNames: []),
             []
         )
         // 保存順の重複は先勝ちで 1 つに畳む
         XCTAssertEqual(
-            NoroshiNavigation.resolvedSessionOrder(savedOrder: ["A", "A", "B"], currentNames: ["A", "B"]),
+            NoroshiNavigation.displayedSessionNames(savedOrder: ["A", "A", "B"], currentNames: ["A", "B"]),
             ["A", "B"]
         )
-        // 全 session が保存順に無い場合も現存順で返す
+        // 全 session が未追加なら空
         XCTAssertEqual(
-            NoroshiNavigation.resolvedSessionOrder(savedOrder: ["Z"], currentNames: ["A", "B"]),
-            ["A", "B"]
+            NoroshiNavigation.displayedSessionNames(savedOrder: ["Z"], currentNames: ["A", "B"]),
+            []
         )
     }
 }
