@@ -61,13 +61,30 @@ final class TmuxModelsTests: XCTestCase {
 
     @MainActor
     func testBadgeApplyAndClear() throws {
-        let state = AppState(client: TmuxClient(binaryPath: "/usr/bin/false"))
+        let suiteName = "TmuxModelsTests.testBadgeApplyAndClear.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(["Focus"], forKey: "noroshi.sidebarSessionNames")
+        let state = AppState(client: TmuxClient(binaryPath: "/usr/bin/false"), defaults: defaults)
         let event = try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Focus&window=@18"))))
         state.apply(event: event)
         state.apply(event: event)
         XCTAssertEqual(state.badges["@18"], 2)
         state.clearBadge(windowID: "@18")
         XCTAssertNil(state.badges["@18"])
+    }
+
+    @MainActor
+    func testBadgeIgnoresSessionNotAddedToSidebar() throws {
+        let suiteName = "TmuxModelsTests.testBadgeIgnoresSessionNotAddedToSidebar.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let state = AppState(client: TmuxClient(binaryPath: "/usr/bin/false"), defaults: defaults)
+        let event = try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Hidden&window=@19"))))
+
+        state.apply(event: event)
+
+        XCTAssertNil(state.badges["@19"])
     }
 
     func testLatestUnreadWindowID() {

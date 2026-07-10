@@ -101,6 +101,11 @@ final class AppState: ObservableObject {
     func removeSessionFromSidebar(_ sessionName: String) {
         let updated = sidebarSessionNames.filter { $0 != sessionName }
         guard updated != sidebarSessionNames else { return }
+        if let removedSession = sessions.first(where: { $0.name == sessionName }) {
+            let removedWindowIDs = Set(removedSession.windows.map(\.id))
+            badges = badges.filter { !removedWindowIDs.contains($0.key) }
+            updateDockBadge()
+        }
         saveSidebarSessionNames(updated)
         if selectedSessionName == sessionName {
             selectedSessionName = displaySessionNames.first
@@ -155,8 +160,9 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Stop hook 由来のイベントを適用し、該当 window の未読数を 1 増やして履歴に記録する。
+    /// 追加済み session の Stop hook イベントだけを適用し、該当 window の未読数を 1 増やして履歴に記録する。
     func apply(event: StopEvent) {
+        guard sidebarSessionNames.contains(event.sessionName) else { return }
         badges[event.windowID, default: 0] += 1
         notifications.append(NotificationRecord(windowID: event.windowID, receivedAt: Date()))
         if notifications.count > Self.notificationHistoryLimit {
@@ -244,7 +250,7 @@ final class AppState: ObservableObject {
     /// 該当 window が現在の一覧に存在しない場合は何もしない。
     func openLatestNotified() {
         guard let windowID = NoroshiNavigation.latestUnreadWindowID(history: notifications, badges: badges),
-              let window = sessions.flatMap(\.windows).first(where: { $0.id == windowID }) else { return }
+              let window = displaySessions.flatMap(\.windows).first(where: { $0.id == windowID }) else { return }
         open(window: window)
     }
 
