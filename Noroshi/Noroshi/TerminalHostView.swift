@@ -433,12 +433,16 @@ struct TerminalHostView: NSViewRepresentable {
         install(on: container)
     }
 
-    /// sessionName の terminal view をコンテナに取り付け、新規取り付け時だけフォーカスを当てる。
+    /// sessionName の terminal view をコンテナに取り付け、新規取り付け時またはsession切替時にフォーカスを当てる。
     private func install(on container: NSView) {
-        let terminal = TerminalSessionManager.shared.terminalView(for: sessionName)
-        // superview が変わっていない (ポーリング由来の再描画) 場合は取り付けもフォーカス移動もしない。
-        // 毎回 makeFirstResponder するとサイドバー等からフォーカスを奪ってしまうため新規取り付け時のみに限定する。
-        guard terminal.superview !== container else { return }
+        let manager = TerminalSessionManager.shared
+        let didChangeSession = manager.managedSessionName != sessionName
+        let terminal = manager.terminalView(for: sessionName)
+        // ポーリング由来の再描画ではフォーカスを奪わず、同じviewをswitch-clientした場合だけterminalへ戻す。
+        guard terminal.superview !== container else {
+            if didChangeSession { focus(terminal) }
+            return
+        }
         container.subviews.forEach { $0.removeFromSuperview() }
         terminal.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(terminal)
@@ -448,6 +452,10 @@ struct TerminalHostView: NSViewRepresentable {
             terminal.topAnchor.constraint(equalTo: container.topAnchor),
             terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
+        focus(terminal)
+    }
+
+    private func focus(_ terminal: LocalProcessTerminalView) {
         // updateNSView の同期処理中に firstResponder を変えると SwiftUI の更新と競合するため次の runloop に回す
         DispatchQueue.main.async {
             if let window = terminal.window, window.firstResponder !== terminal {

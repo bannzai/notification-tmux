@@ -4,6 +4,7 @@ import Foundation
 enum TmuxClientError: Error, CustomStringConvertible {
     case commandFailed(status: Int32, stderr: String)
     case clientNotFound(pid: Int32)
+    case sessionNotFound(name: String)
 
     var description: String {
         switch self {
@@ -11,6 +12,8 @@ enum TmuxClientError: Error, CustomStringConvertible {
             return "tmux exited with status \(status): \(stderr)"
         case .clientNotFound(let pid):
             return "tmux client for pid \(pid) was not found"
+        case .sessionNotFound(let name):
+            return "tmux session \(name) was not found"
         }
     }
 
@@ -21,7 +24,7 @@ enum TmuxClientError: Error, CustomStringConvertible {
         switch self {
         case .commandFailed(_, let stderr):
             return stderr.contains("no server running") || stderr.contains("error connecting")
-        case .clientNotFound:
+        case .clientNotFound, .sessionNotFound:
             return false
         }
     }
@@ -120,7 +123,15 @@ struct TmuxClient {
         guard let attachedClient = try attachedClient(pid: pid) else {
             throw TmuxClientError.clientNotFound(pid: pid)
         }
-        try run(["switch-client", "-c", attachedClient.tty, "-t", "=\(session)"])
+        // switch-clientは`.`、`:`、`%`を含むtargetをpaneとして特別扱いするため、名前ではなくsession IDを渡す。
+        guard let sessionID = try run(["list-sessions", "-F", TmuxFormat.sessionIDFormat])
+            .split(separator: "\n")
+            .compactMap({ TmuxFormat.parseSessionIDLine(String($0)) })
+            .first(where: { $0.name == session })?.id
+        else {
+            throw TmuxClientError.sessionNotFound(name: session)
+        }
+        try run(["switch-client", "-c", attachedClient.tty, "-t", sessionID])
     }
 
     /// session のカレント window を次の window に切り替える (末尾↔先頭で循環; tmux ネイティブ挙動)。

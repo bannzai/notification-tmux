@@ -37,6 +37,13 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertNil(TmuxFormat.parseSessionLine("no-separator"))
     }
 
+    func testParseSessionIDLinePreservesPaneTargetCharactersInName() {
+        let parsed = TmuxFormat.parseSessionIDLine("$12\u{1f}my.app:build%1")
+        XCTAssertEqual(parsed?.id, "$12")
+        XCTAssertEqual(parsed?.name, "my.app:build%1")
+        XCTAssertNil(TmuxFormat.parseSessionIDLine("not-an-id\u{1f}Focus"))
+    }
+
     func testParseClientLine() {
         XCTAssertEqual(
             TmuxFormat.parseClientLine("1234\u{1f}/dev/ttys001\u{1f}Focus"),
@@ -202,6 +209,13 @@ final class TmuxModelsTests: XCTestCase {
                 for: directory,
                 existingNames: ["project", "project-2", "project-4"]),
             "project-3"
+        )
+
+        XCTAssertEqual(
+            TmuxSessionNaming.availableName(
+                for: URL(fileURLWithPath: "/Users/example/my.app:demo"),
+                existingNames: []),
+            "my_app_demo"
         )
     }
 }

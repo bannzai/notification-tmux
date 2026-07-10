@@ -6,7 +6,17 @@ import UserNotifications
 /// Claude Code の Stop hook から `noroshi://stop?...` を受けてサイドバーにバッジを付ける。
 @main
 struct NoroshiApp: App {
-    @StateObject private var appState = AppState()
+    @StateObject private var appState: AppState
+
+    init() {
+        let appState = AppState()
+        _appState = StateObject(wrappedValue: appState)
+        // 通知タップによるcold launchを取りこぼさないよう、Scene構築前にdelegateと遷移先を登録する。
+        guard ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        NotificationService.shared.configure { [weak appState] event in
+            appState?.open(event: event)
+        }
+    }
 
     /// TEST_HOST としてユニットテストから起動されたかどうか。
     /// テスト実行時はポーリングや tmux attach でユーザーの tmux 環境 (クライアントサイズ等) に影響を与えないよう UI を起動しない。
@@ -24,18 +34,12 @@ struct NoroshiApp: App {
                     .environmentObject(appState)
                     .onOpenURL { url in
                         guard let event = StopEvent(url: url) else { return }
-                        NotificationService.shared.configure { event in
-                            appState.open(event: event)
-                        }
                         appState.apply(event: event)
                         NotificationService.shared.deliver(
                             event: event,
                             window: appState.window(id: event.windowID))
                     }
                     .task {
-                        NotificationService.shared.configure { event in
-                            appState.open(event: event)
-                        }
                         appState.startPolling()
                     }
                     .frame(minWidth: 900, minHeight: 560)

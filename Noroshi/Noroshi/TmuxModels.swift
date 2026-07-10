@@ -38,6 +38,8 @@ enum TmuxFormat {
     static let windowFormat = "#{session_name}\u{1f}#{window_id}\u{1f}#{window_index}\u{1f}#{window_name}\u{1f}#{window_active}\u{1f}#{window_panes}"
     /// `list-sessions -F` 用。
     static let sessionFormat = "#{session_name}\u{1f}#{session_attached}"
+    /// session名を安全なswitch-client targetへ解決する`list-sessions -F`用。
+    static let sessionIDFormat = "#{session_id}\u{1f}#{session_name}"
     /// `list-clients -F` 用。SwiftTerm の子 PID から Noroshi 自身の tmux client を特定する。
     static let clientFormat = "#{client_pid}\u{1f}#{client_tty}\u{1f}#{session_name}"
 
@@ -57,6 +59,13 @@ enum TmuxFormat {
         let parts = line.split(separator: fieldSeparator, omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 2, let attached = Int(parts[1]) else { return nil }
         return (parts[0], attached)
+    }
+
+    /// `sessionIDFormat`で出力された1行を(session ID, session名)にする。形式が合わない行はnil。
+    static func parseSessionIDLine(_ line: String) -> (id: String, name: String)? {
+        let parts = line.split(separator: fieldSeparator, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2, parts[0].hasPrefix("$"), !parts[1].isEmpty else { return nil }
+        return (parts[0], parts[1])
     }
 
     /// `clientFormat` で出力された 1 行を tmux client 情報にする。形式が合わない行は nil。
@@ -122,7 +131,10 @@ enum TmuxSessionNaming {
     static func availableName(for directory: URL, existingNames: Set<String>) -> String {
         let directoryName = directory.standardizedFileURL.lastPathComponent
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let baseName = directoryName.isEmpty ? "session" : directoryName
+        // tmuxは新規session名の`.`と`:`を`_`へ置換するため、返却名と実際のsession名を一致させる。
+        let baseName = (directoryName.isEmpty ? "session" : directoryName)
+            .replacingOccurrences(of: ".", with: "_")
+            .replacingOccurrences(of: ":", with: "_")
         guard existingNames.contains(baseName) else { return baseName }
 
         var suffix = 2
