@@ -19,7 +19,8 @@
 
 ### session / client / window 切替の意味論
 - **session のカレント window は session 単位で 1 つ** (client 単位ではない)。`select-window` は同じ session に attach している全クライアントの表示を切り替える
-- 「session ごとに専属 PTY クライアントを 1 本張る」設計なら `select-window -t @n` だけでアプリ内の表示が切り替わり、`switch-client` は不要
+- NoroshiはPTY clientを1本だけattachし、session切替には`switch-client -c <client_tty> -t =<session>`を使う。SwiftTermの子PIDと`#{client_pid}`を照合して自clientのttyを特定する
+- 同じclientを維持することで、tmux標準の`switch-client -l`（既定bindは`prefix + L`）が直前sessionへ戻れる。tmux内で変わった接続先は`#{session_name}`のポーリングでサイドバーへ反映する
 - cmux 等の別クライアントが同じ session に attach していると `select-window` はそちらの表示も変える。分離したければ **session group** (`tmux new-session -t <対象>`): window 群を共有しつつカレント window を独立に持てる
 - attach の target は `=` プレフィックスで完全一致にする: `attach-session -t =<name>` (前方一致の誤爆防止)
 - tmux 3.1+ の既定 `window-size latest` により、小さいクライアントを attach しっぱなしにしても「最後に操作したクライアント」基準でサイズが決まる
@@ -59,7 +60,7 @@
 - **デフォルト環境変数に PATH が入らない** (意図的にコメントアウトされている)。絶対パスで exec するか、ログインシェル経由 (`execName: "-zsh"`) にする。tmux attach は attach 先の環境がサーバ側なので実害なし
 - **`feed()` と `send()` の混同**: `feed()` は表示バッファへの書き込みのみで子プロセスに届かない。プロセスに入力を送るのは `send()` (issue #288)
 - **App Sandbox は完全無効が公式の立場**。公式サンプル (MacTerminal) の entitlements は空 dict。entitlements を作らない or `ENABLE_APP_SANDBOX = NO`
-- **非表示ビューでも attach と VT パースは継続する** (描画だけ AppKit がスキップ)。session ごとにビューを生かして保持する設計が成立する。破棄は明示的に `terminate()`
+- **非表示ビューでも attach と VT パースは継続する** (描画だけ AppKit がスキップ)。そのためNoroshiはviewをsessionごとにキャッシュせず、同じ1個のview/clientを`switch-client`して使う。client特定に失敗した場合だけ旧viewを`terminate()`して再attachする
 - `processTerminated(exitCode:)` の exitCode は IO エラー時に nil。tmux の detach とプロセス死をこのコールバックだけでは区別できない
 - フォーカスは `window.makeFirstResponder(terminalView)` を呼ぶだけで良い (acceptsFirstResponder 等は実装済み)。ただし **updateNSView の同期処理中に呼ぶと SwiftUI の更新と競合する**ので `DispatchQueue.main.async` で次の runloop に回す
 - `font` の setter は selection 解除と再計算の副作用があるので、SwiftUI の更新のたびに無条件代入しない

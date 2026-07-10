@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [0005](0005-switch-client-for-session-navigation.md)
 
 ## Context
 
