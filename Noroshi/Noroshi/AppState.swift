@@ -2,6 +2,18 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// メニューショートカットから移すフォーカス先。
+enum AppFocusTarget: Equatable {
+    case sidebar
+    case terminal
+}
+
+/// 同じフォーカス先への連続要求も View へ伝えるためのイベント。
+struct AppFocusRequest: Equatable {
+    let sequence: Int
+    let target: AppFocusTarget
+}
+
 /// アプリ全体の状態。session 一覧・未読バッジ・通知履歴・選択中 session を持つ。
 /// ObservableObject を要求する SwiftUI のためクラスにしている。
 @MainActor
@@ -21,7 +33,13 @@ final class AppState: ObservableObject {
     /// windowID -> 未読数。Stop イベントで加算し、window を開いたらクリアする。
     @Published private(set) var badges: [String: Int] = [:]
     /// terminal を表示中の session 名。nil なら未選択。
-    @Published var selectedSessionName: String?
+    @Published private(set) var selectedSessionName: String?
+    /// サイドバーで選択表示する window ID。クリック直後もポーリングを待たずに表示へ反映する。
+    @Published private(set) var selectedWindowID: String?
+    /// 折りたたみ中の session 名。未収録なら展開状態。
+    @Published private(set) var collapsedSessionNames: Set<String> = []
+    /// メニューから View へ配送する最新のフォーカス要求。
+    @Published private(set) var focusRequest: AppFocusRequest?
     /// 直近の tmux コマンド失敗。エラーメッセージは加工せずそのまま表示する。
     @Published var lastError: String?
     /// コマンドパレット (cmd+P) の表示状態。true の間だけ terminal の上にオーバーレイを重ねる。
@@ -39,6 +57,10 @@ final class AppState: ObservableObject {
     private let defaults: UserDefaults
     /// 一覧ポーリングのループ。
     private var pollTask: Task<Void, Never>?
+    /// `select-window` 完了待ちの window ID。ポーリングが古い active window を返しても選択表示を戻さないために保持する。
+    private var requestedWindowID: String?
+    /// 同じフォーカス先への連続操作を別イベントとして配送する連番。
+    private var focusRequestSequence = 0
 
     // テストからダミー binaryPath の client を注入するために定義している
     init(client: TmuxClient = TmuxClient(), defaults: UserDefaults = .standard) {
@@ -94,6 +116,7 @@ final class AppState: ObservableObject {
         saveSidebarSessionNames(sidebarSessionNames + [sessionName])
         if selectedSessionName == nil {
             selectedSessionName = sessionName
+            synchronizeSelectedWindow()
         }
     }
 
@@ -109,7 +132,36 @@ final class AppState: ObservableObject {
         saveSidebarSessionNames(updated)
         if selectedSessionName == sessionName {
             selectedSessionName = displaySessionNames.first
+            synchronizeSelectedWindow()
         }
+    }
+
+    /// session の折りたたみ状態を更新する。同じ状態への再設定は何もしない (冪等)。
+    func setSessionExpanded(_ sessionName: String, isExpanded: Bool) {
+        var updated = collapsedSessionNames
+        if isExpanded {
+            updated.remove(sessionName)
+        } else {
+            updated.insert(sessionName)
+        }
+        guard updated != collapsedSessionNames else { return }
+        collapsedSessionNames = updated
+    }
+
+    /// session を選択し、必要ならサイドバー上でも展開する。
+    func selectSession(named sessionName: String, expand: Bool = false) {
+        guard displaySessionNames.contains(sessionName) else { return }
+        selectedSessionName = sessionName
+        if expand {
+            setSessionExpanded(sessionName, isExpanded: true)
+        }
+        synchronizeSelectedWindow()
+    }
+
+    /// フォーカス要求は同じ対象への連続ショートカットも毎回配送する必要があるため、意図的に連番を進める。
+    func requestFocus(_ target: AppFocusTarget) {
+        focusRequestSequence += 1
+        focusRequest = AppFocusRequest(sequence: focusRequestSequence, target: target)
     }
 
     /// 追加済み session 名をメモリと UserDefaults へ同時に反映する。
@@ -161,6 +213,14 @@ final class AppState: ObservableObject {
             } else if selectedSessionName.map({ !displaySessionNames.contains($0) }) ?? true {
                 selectedSessionName = displaySessionNames.first
             }
+            if let requestedWindowID,
+               fetched.lazy.flatMap(\.windows).contains(where: { $0.id == requestedWindowID })
+            {
+                selectedWindowID = requestedWindowID
+            } else {
+                requestedWindowID = nil
+                synchronizeSelectedWindow()
+            }
             updateDockBadge()
         } catch {
             // 同一エラーの再代入は objectWillChange を無駄に発火させるため値が変わった時だけ更新する。
@@ -171,6 +231,8 @@ final class AppState: ObservableObject {
             guard (error as? TmuxClientError)?.isNoServer == true else { return }
             if !sessions.isEmpty { sessions = [] }
             if selectedSessionName != nil { selectedSessionName = nil }
+            if selectedWindowID != nil { selectedWindowID = nil }
+            requestedWindowID = nil
             if !badges.isEmpty { badges = [:] }
             updateDockBadge()
         }
@@ -236,7 +298,7 @@ final class AppState: ObservableObject {
                 await self.refresh()
                 await MainActor.run {
                     self.addSessionToSidebar(sessionName)
-                    self.selectedSessionName = sessionName
+                    self.selectSession(named: sessionName, expand: true)
                 }
             } catch {
                 await MainActor.run { self.lastError = "\(error)" }
@@ -252,13 +314,28 @@ final class AppState: ObservableObject {
     /// window を開く: session の terminal を表示し、tmux 側のカレント window を切り替え、未読をクリアする。
     func open(window: TmuxWindow) {
         selectedSessionName = window.sessionName
+        selectedWindowID = window.id
+        requestedWindowID = window.id
+        setSessionExpanded(window.sessionName, isExpanded: true)
         clearBadge(windowID: window.id)
         let client = self.client
         Task.detached(priority: .userInitiated) {
             do {
                 try client.selectWindow(id: window.id)
+                await self.refresh()
+                await MainActor.run {
+                    guard self.requestedWindowID == window.id else { return }
+                    self.requestedWindowID = nil
+                    self.synchronizeSelectedWindow()
+                }
             } catch {
-                await MainActor.run { self.lastError = "\(error)" }
+                await MainActor.run {
+                    if self.requestedWindowID == window.id {
+                        self.requestedWindowID = nil
+                        self.synchronizeSelectedWindow()
+                    }
+                    self.lastError = "\(error)"
+                }
             }
         }
     }
@@ -266,7 +343,7 @@ final class AppState: ObservableObject {
     /// コマンドパレットで候補を決定したときの遷移。session 行は選択、window 行は open (session 切替 + select-window + バッジクリア)。
     func activate(paletteItem: PaletteItem) {
         switch paletteItem.kind {
-        case .session(let name): selectedSessionName = name
+        case .session(let name): selectSession(named: name, expand: true)
         case .window(let window): open(window: window)
         }
     }
@@ -274,14 +351,14 @@ final class AppState: ObservableObject {
     /// 表示順で displayIndex 番目 (0 始まり) の session に切り替える (cmd+1..9)。
     func selectSession(atDisplayIndex displayIndex: Int) {
         if let name = NoroshiNavigation.sessionName(in: displaySessionNames, atDisplayIndex: displayIndex) {
-            selectedSessionName = name
+            selectSession(named: name, expand: true)
         }
     }
 
     /// 表示順で offset (次: +1 / 前: -1) 隣の session に循環で切り替える (cmd+shift+j/k)。
     func selectAdjacentSession(_ offset: Int) {
         if let name = NoroshiNavigation.adjacentSessionName(in: displaySessionNames, from: selectedSessionName, offset: offset) {
-            selectedSessionName = name
+            selectSession(named: name, expand: true)
         }
     }
 
@@ -289,6 +366,7 @@ final class AppState: ObservableObject {
     /// 移動後、新しいアクティブ window のバッジをクリアして一覧を更新する。
     func moveWindow(_ offset: Int) {
         guard let session = selectedSessionName else { return }
+        setSessionExpanded(session, isExpanded: true)
         let client = self.client
         Task.detached(priority: .userInitiated) {
             do {
@@ -298,7 +376,10 @@ final class AppState: ObservableObject {
                     try client.previousWindow(session: session)
                 }
                 let windowID = try client.activeWindowID(session: session)
-                await MainActor.run { self.clearBadge(windowID: windowID) }
+                await MainActor.run {
+                    self.selectedWindowID = windowID
+                    self.clearBadge(windowID: windowID)
+                }
                 await self.refresh()
             } catch {
                 await MainActor.run { self.lastError = "\(error)" }
@@ -331,6 +412,13 @@ final class AppState: ObservableObject {
     func clearBadge(windowID: String) {
         badges[windowID] = nil
         updateDockBadge()
+    }
+
+    /// 現在選択中 session の active window を、サイドバーの選択表示へ同期する。
+    private func synchronizeSelectedWindow() {
+        selectedWindowID = sessions
+            .first(where: { $0.name == selectedSessionName })?
+            .windows.first(where: \.isActive)?.id
     }
 
     /// Dock アイコンのバッジに未読合計を反映する。0 なら消す。

@@ -313,6 +313,17 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         currentSessionName = sessionName
     }
 
+    /// 現在表示中の terminal を first responder にする。同じ view への再要求も同じ状態へ収束する (冪等)。
+    func focusTerminal() {
+        guard let view = currentView else { return }
+        // SwiftUI の View 更新と first responder 変更が競合しないよう次の runloop に回す。
+        DispatchQueue.main.async {
+            if let window = view.window, window.firstResponder !== view {
+                window.makeFirstResponder(view)
+            }
+        }
+    }
+
     /// 表示コンテナが破棄されたとき、そのコンテナ内の現行 terminal を終了して attach を手放す。
     /// 別コンテナへ移動済みの view や再度の呼び出しでは何もしない (冪等)。
     func detachTerminal(from container: NSView) {
@@ -456,7 +467,7 @@ struct TerminalHostView: NSViewRepresentable {
         let terminal = manager.terminalView(for: sessionName)
         // ポーリング由来の再描画ではフォーカスを奪わず、同じviewをswitch-clientした場合だけterminalへ戻す。
         guard terminal.superview !== container else {
-            if didChangeSession { focus(terminal) }
+            if didChangeSession { manager.focusTerminal() }
             return
         }
         container.subviews.forEach { $0.removeFromSuperview() }
@@ -468,15 +479,6 @@ struct TerminalHostView: NSViewRepresentable {
             terminal.topAnchor.constraint(equalTo: container.topAnchor),
             terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        focus(terminal)
-    }
-
-    private func focus(_ terminal: LocalProcessTerminalView) {
-        // updateNSView の同期処理中に firstResponder を変えると SwiftUI の更新と競合するため次の runloop に回す
-        DispatchQueue.main.async {
-            if let window = terminal.window, window.firstResponder !== terminal {
-                window.makeFirstResponder(terminal)
-            }
-        }
+        manager.focusTerminal()
     }
 }

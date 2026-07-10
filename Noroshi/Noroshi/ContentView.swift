@@ -30,5 +30,9 @@ struct ContentView: View {
                 CommandPaletteView()
             }
         }
+        .onChange(of: appState.focusRequest) { _, request in
+            guard request?.target == .terminal else { return }
+            TerminalSessionManager.shared.focusTerminal()
+        }
     }
 }
