@@ -305,11 +305,12 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         view.processDelegate = self
         // `=` プレフィックスで session 名の完全一致を強制 (前方一致による誤 attach を防ぐ)
+        // Noroshi の画面サイズで他 client の window を resize しないよう ignore-size で attach する。
         view.startProcess(
             executable: TmuxClient.resolveBinaryPath(),
             args: TmuxClient.resolveBinaryPath().hasSuffix("env")
-                ? ["tmux", "attach-session", "-t", "=\(sessionName)"]
-                : ["attach-session", "-t", "=\(sessionName)"]
+                ? ["tmux", "attach-session", "-f", "ignore-size", "-t", "=\(sessionName)"]
+                : ["attach-session", "-f", "ignore-size", "-t", "=\(sessionName)"]
         )
         theme?.apply(to: view)
         applyFont(theme, to: view)
