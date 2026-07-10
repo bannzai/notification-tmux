@@ -46,7 +46,7 @@ Noroshi.app ◀─────────────────────�
 
 - **window の識別子は tmux の window_id (`@n`) を SSOT にする**。サーバ全体でユニークで、session/window の改名・並べ替えの影響を受けない
 - **単一 attach 方式**（issue #6）: 常時 attach する terminal client は最大 1 本に限定し、表示中の session だけを attach する。session を切り替えると直前の view を `terminate()` して破棄してから新しい session に attach する。非表示 view を生かし続けないことで、attach client / VT パース / スクロールバックの多重コストを避ける
-- **独自 config + Ghostty テーマ対応**: アプリ独自の設定ファイル `~/.config/noroshi/config`（`XDG_CONFIG_HOME` を尊重、無ければ `~/.config/ghostty/config` にフォールバック）と、そこから参照される theme ファイルを読み、Ghostty と同じ意味論（theme が先に読まれ config の直接指定が上書きする）でマージした配色を SwiftTerm に適用する。ファイル形式は Ghostty config 互換で、`font-family` / `font-size` も反映する。config 編集後は再起動せず、メニュー「表示 > テーマを再読み込み」(cmd+shift+r) で反映できる。詳細は [ADR 0004](documents/adr/0004-noroshi-config-file.md) を参照
+- **独自 config + Ghostty テーマ対応**: アプリ独自の設定ファイル `~/.config/noroshi/config`（`XDG_CONFIG_HOME` を尊重、無ければ `~/.config/ghostty/config` にフォールバック）と、そこから参照される theme ファイルを読み、Ghostty と同じ意味論（theme が先に読まれ config の直接指定が上書きする）でマージした配色を SwiftTerm に適用する。ファイル形式は Ghostty config 互換で、`font-family` / `font-style` / `font-size` も反映する。config 編集後は再起動せず、メニュー「表示 > テーマを再読み込み」(cmd+shift+r) で反映できる。詳細は [ADR 0004](documents/adr/0004-noroshi-config-file.md) を参照
 - App Sandbox は無効 (homebrew の tmux を PTY で exec するため。SwiftTerm 公式の推奨)
 - 詳細な知見・ハマりどころは [docs/knowledge.md](docs/knowledge.md) を参照（v1 開発時の記録）
 
@@ -69,7 +69,7 @@ Noroshi.app ◀─────────────────────�
 
 ### 設定 (フォント・テーマ・色)
 
-`cmd+,` で設定ウィンドウを開き、フォント (family / size)・テーマ・色 (背景 / 文字 / カーソル / 選択範囲) を調整できる。変更は即時に `~/.config/noroshi/config` へ書き戻され、表示中の terminal に反映される。テーマを選ぶと明示色は消え、個別色を変えるとその色だけが上書きされる (Ghostty 準拠の意味論)。
+`cmd+,` で設定ウィンドウを開き、フォント (family / style / size)・テーマ・色 (背景 / 文字 / カーソル / 選択範囲) を調整できる。文字の太さはフォント既定 / Regular / Medium / Semibold / Bold から選べる。変更は即時に `~/.config/noroshi/config` へ書き戻され、表示中の terminal に反映される。テーマを選ぶと明示色は消え、個別色を変えるとその色だけが上書きされる (Ghostty 準拠の意味論)。
 
 既に Ghostty を使っている場合は、移植スクリプトで Noroshi が理解するキーだけを独自 config にコピーできる:
 
@@ -78,7 +78,7 @@ scripts/noroshi-port-ghostty-config          # ~/.config/ghostty/config → ~/.c
 scripts/noroshi-port-ghostty-config --force  # 出力先が既にある場合に上書き
 ```
 
-抽出対象は `theme` / `background` / `foreground` / `cursor-color` / `selection-background` / `palette` / `font-family` / `font-size`。元の ghostty config には触れない。
+抽出対象は `theme` / `background` / `foreground` / `cursor-color` / `selection-background` / `palette` / `font-family` / `font-style` / `font-size`。元の ghostty config には触れない。
 
 ### ディレクトリ構成
 

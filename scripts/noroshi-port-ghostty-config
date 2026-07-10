@@ -42,7 +42,7 @@ fi
 mkdir -p "$(dirname "$dst")"
 
 # Noroshi が理解するキーだけを抽出する:
-#   theme / background / foreground / cursor-color / selection-background / palette / font-family / font-size
+#   theme / background / foreground / cursor-color / selection-background / palette / font-family / font-style / font-size
 # 正規表現は「行頭の任意空白 + キー + 任意空白 + =」にマッチさせる。
 # 該当キーが 1 つも無くても失敗にしない (|| true)。
 tmp="$(mktemp)"
@@ -51,7 +51,7 @@ tmp="$(mktemp)"
   echo "#   $src"
   echo "# から Noroshi が理解するキーだけを移植して生成した。"
   echo "# 形式は Ghostty config 互換 (key = value)。"
-  grep -E '^[[:space:]]*(theme|background|foreground|cursor-color|selection-background|palette|font-family|font-size)[[:space:]]*=' "$src" || true
+  grep -E '^[[:space:]]*(theme|background|foreground|cursor-color|selection-background|palette|font-family|font-style|font-size)[[:space:]]*=' "$src" || true
 } >"$tmp"
 
 mv "$tmp" "$dst"

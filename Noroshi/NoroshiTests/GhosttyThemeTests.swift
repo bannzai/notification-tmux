@@ -251,14 +251,16 @@ final class GhosttyThemeTests: XCTestCase {
         XCTAssertEqual(theme?.background, color8(0x01, 0x02, 0x03))
     }
 
-    // MARK: - font-family / font-size
+    // MARK: - font-family / font-style / font-size
 
     func testParsesFontKeys() {
         let (theme, _) = GhosttyTheme.parse(configText: """
         font-family = JetBrains Mono
+        font-style = Bold
         font-size = 14
         """)
         XCTAssertEqual(theme.fontFamily, "JetBrains Mono")
+        XCTAssertEqual(theme.fontStyle, "Bold")
         XCTAssertEqual(theme.fontSize, 14)
     }
 
@@ -270,30 +272,36 @@ final class GhosttyThemeTests: XCTestCase {
     func testFontKeysIgnoreEmptyAndInvalidValues() {
         let (theme, _) = GhosttyTheme.parse(configText: """
         font-family =
+        font-style =
         font-size = not-a-number
         """)
         XCTAssertNil(theme.fontFamily)  // 空値は未設定扱い
+        XCTAssertNil(theme.fontStyle)   // 空値は未設定扱い
         XCTAssertNil(theme.fontSize)    // 数値でない値は無視
     }
 
     func testFontKeysDefaultToNil() {
         let (theme, _) = GhosttyTheme.parse(configText: "background = #303446")
         XCTAssertNil(theme.fontFamily)
+        XCTAssertNil(theme.fontStyle)
         XCTAssertNil(theme.fontSize)
     }
 
     func testConfigFontOverridesThemeFont() throws {
         // theme ファイルにフォントがあっても config 側が優先する (overlaid の font 経路)
         let themesDir = try makeTempDirectory()
-        try "font-size = 10".write(to: themesDir.appendingPathComponent("FontTheme"), atomically: true, encoding: .utf8)
+        try "font-style = Regular\nfont-size = 10".write(
+            to: themesDir.appendingPathComponent("FontTheme"), atomically: true, encoding: .utf8)
         let theme = GhosttyTheme.resolve(
             configText: """
             theme = FontTheme
+            font-style = Bold
             font-size = 20
             """,
             themesDirectories: [themesDir.path],
             prefersDark: true
         )
+        XCTAssertEqual(theme.fontStyle, "Bold")
         XCTAssertEqual(theme.fontSize, 20)
     }
 

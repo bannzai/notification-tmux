@@ -2,6 +2,61 @@ import AppKit
 import SwiftTerm
 import SwiftUI
 
+/// Ghostty の font-family / font-style を AppKit のフォントへ解決する。
+/// 指定ファミリが利用できない場合も、style に対応する等幅システムフォントへフォールバックする。
+enum TerminalFontResolver {
+    static func resolve(family: String?, style: String?, size: CGFloat, base: NSFont) -> NSFont {
+        if let family, !family.isEmpty {
+            if let font = font(family: family, style: style, size: size) {
+                return font
+            }
+            return NSFont.monospacedSystemFont(ofSize: size, weight: weight(for: style) ?? .regular)
+        }
+
+        guard let weight = weight(for: style) else {
+            return NSFont(descriptor: base.fontDescriptor, size: size)
+                ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+    }
+
+    private static func font(family: String, style: String?, size: CGFloat) -> NSFont? {
+        if let style, !style.isEmpty,
+           let member = NSFontManager.shared.availableMembers(ofFontFamily: family)?.first(where: {
+               guard $0.count > 1, let memberStyle = $0[1] as? String else { return false }
+               return memberStyle.caseInsensitiveCompare(style) == .orderedSame
+           }),
+           let postScriptName = member.first as? String,
+           let exact = NSFont(name: postScriptName, size: size)
+        {
+            return exact
+        }
+
+        let managerWeight = fontManagerWeight(for: style) ?? 5
+        return NSFontManager.shared.font(withFamily: family, traits: [], weight: managerWeight, size: size)
+    }
+
+    private static func fontManagerWeight(for style: String?) -> Int? {
+        switch style?.lowercased() {
+        case "regular": return 5
+        case "medium": return 6
+        case "semibold", "demibold": return 8
+        case "bold": return 9
+        default: return nil
+        }
+    }
+
+    private static func weight(for style: String?) -> NSFont.Weight? {
+        switch style?.lowercased() {
+        case "regular": return .regular
+        case "medium": return .medium
+        case "semibold", "demibold": return .semibold
+        case "bold": return .bold
+        default: return nil
+        }
+    }
+}
+
 /// tmux のようにマウスレポートを有効化した相手へ、SwiftTerm 1.13.0 が取りこぼす
 /// ホイールスクロールと buttonEventTracking (DECSET 1002) のドラッグ motion を SGR レポートとして送出する
 /// terminal view。SwiftTerm 本体 (checkouts) は改変不可で、かつ TerminalView の
@@ -261,24 +316,19 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
-    /// 解決済み設定の font-family / font-size を TerminalView.font に反映する。
-    /// 両方 nil (未指定) のときは SwiftTerm の既定フォントを尊重して何もしない。
+    /// 解決済み設定の font-family / font-style / font-size を TerminalView.font に反映する。
+    /// すべて nil (未指定) のときは SwiftTerm の既定フォントを尊重して何もしない。
     /// family が実在しなければ等幅システムフォントへフォールバックする。
     /// font setter は selection 解除・レイアウト再計算の副作用があるため、値が変わる時だけ代入する (docs/knowledge.md)。
     private func applyFont(_ theme: GhosttyTheme?, to view: TerminalView) {
-        guard let theme, theme.fontFamily != nil || theme.fontSize != nil else { return }
+        guard let theme, theme.fontFamily != nil || theme.fontStyle != nil || theme.fontSize != nil else { return }
         let base = view.font
         let size = theme.fontSize.map { CGFloat($0) } ?? base.pointSize
-        let font: NSFont
-        if let family = theme.fontFamily, !family.isEmpty {
-            // weight 5 = regular / traits [] = ボールドやイタリックを付けない
-            font = NSFontManager.shared.font(withFamily: family, traits: [], weight: 5, size: size)
-                ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        } else {
-            // family 未指定・size のみ指定 → 現在のフォントのサイズだけ変える
-            font = NSFont(descriptor: base.fontDescriptor, size: size)
-                ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        }
+        let font = TerminalFontResolver.resolve(
+            family: theme.fontFamily,
+            style: theme.fontStyle,
+            size: size,
+            base: base)
         if view.font.fontName != font.fontName || view.font.pointSize != font.pointSize {
             view.font = font
         }
