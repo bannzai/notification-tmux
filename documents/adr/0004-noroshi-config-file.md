@@ -9,16 +9,16 @@ Accepted
 フォントや色を GUI から調整したい (issue #9)。これまで配色は `~/.config/ghostty/config` を直接読んでいた (ADR 0002) が、以下の課題があった。
 
 - Noroshi の設定を書き戻す先が無い。ghostty config を Noroshi が書き換えるのは越権で、ユーザーの Ghostty 環境を壊しかねない
-- フォント (`font-family` / `font-size`) は ADR 0002 のパーサが未対応だった
+- フォント (`font-family` / `font-style` / `font-size`) は ADR 0002 のパーサが未対応だった
 - issue #9 は「libghostty (Ghostty) 形式のパーサは生かしつつ、アプリ独自の設定ファイルに移植する」方針を求めている
 
 ## Decision
 
 Ghostty config 形式 (`key = value`) 互換のアプリ独自設定ファイル `~/.config/noroshi/config` (`XDG_CONFIG_HOME` を尊重) を導入する。
 
-- **パーサ互換の維持**: パースは既存の `GhosttyTheme.parse` / `resolve` をそのまま使う。`font-family` / `font-size` を config レベルのキーとして追加でパースする (Ghostty と同名キー)。theme ファイル内のフォント対応は不要
+- **パーサ互換の維持**: パースは既存の `GhosttyTheme.parse` / `resolve` をそのまま使う。`font-family` / `font-style` / `font-size` を config レベルのキーとして追加でパースする (Ghostty と同名キー)。theme ファイル内のフォント対応は不要
 - **ghostty config へのフォールバック**: 既定の読み込みは noroshi config を優先し、無ければ従来どおり ghostty config を読む (`NoroshiConfig.preferredConfigPath`)。noroshi config を持たない既存ユーザーの挙動を壊さない。テーマ探索順は noroshi themes → ghostty themes → Ghostty.app 同梱
-- **フォント適用**: 解決済みの `font-family` / `font-size` から `NSFont` を作り SwiftTerm の `TerminalView.font` に設定する。未指定なら既定フォントを尊重して触らない。family が実在しなければ等幅システムフォントにフォールバックする。`font` setter は selection 解除・再計算の副作用があるため、値が変わる時だけ代入する
+- **フォント適用**: 解決済みの `font-family` / `font-style` / `font-size` から `NSFont` を作り SwiftTerm の `TerminalView.font` に設定する。未指定なら既定フォントを尊重して触らない。family が実在しなければ指定 style と同等ウェイトの等幅システムフォントにフォールバックする。`font` setter は selection 解除・再計算の副作用があるため、値が変わる時だけ代入する
 - **GUI 書き戻しの意味論** (Cmd+, の設定ウィンドウ): 変更を即時に noroshi config へ書き戻し、terminal に再適用する。書き戻しは純粋・テスト可能な `NoroshiConfigEditor` (元テキスト + 設定/削除キー → 新テキスト、冪等) が担う
   - テーマを選んだら `theme = <name>` を書き、明示色 4 キー (background / foreground / cursor-color / selection-background) を削除する。Ghostty では config の明示色が theme を上書きする (ADR 0002) ため、残すと混乱するため
   - 個別色・フォントを変えたら該当キーだけを書く (theme は残す)
