@@ -71,6 +71,123 @@ enum TerminalFontResolver {
 final class MouseReportingTerminalView: LocalProcessTerminalView {
     /// 精密スクロール (トラックパッド) の端数を貯め、セル高ごとに 1 tick へ量子化するための累積値。
     private var scrollAccumulator: CGFloat = 0
+    /// IME が変換中の未確定文字。SwiftTerm 1.13.0 では macOS 側の marked text 描画が未実装なためここで保持する。
+    private var markedTextStorage: NSAttributedString?
+    /// 未確定文字を terminal のキャレット位置に表示する overlay。
+    private var markedTextOverlay: NSTextField?
+
+    // MARK: - NSTextInputClient
+
+    /// IME が確定文字を送る直前に未確定文字の overlay を片付ける。
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        clearMarkedText()
+        super.insertText(string, replacementRange: replacementRange)
+    }
+
+    /// IME の未確定文字を更新し、terminal には送らずキャレット上に preview する。
+    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
+        switch string {
+        case let attributed as NSAttributedString:
+            markedTextStorage = attributed.length > 0 ? attributed : nil
+        case let nsString as NSString:
+            markedTextStorage = nsString.length > 0 ? NSAttributedString(string: nsString as String) : nil
+        case let plain as String:
+            markedTextStorage = plain.isEmpty ? nil : NSAttributedString(string: plain)
+        default:
+            markedTextStorage = nil
+        }
+        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
+        updateMarkedTextOverlay()
+    }
+
+    /// IME が変換を終了したら overlay を確実に外し、削除済み文字の残像を残さない。
+    override func unmarkText() {
+        clearMarkedText()
+        super.unmarkText()
+    }
+
+    /// 選択範囲がないときも IME が入力位置を特定できるよう、現在の cursor 位置を返す。
+    override func selectedRange() -> NSRange {
+        let selection = super.selectedRange()
+        guard selection.location == NSNotFound else { return selection }
+        let terminal = getTerminal()
+        return NSRange(location: terminal.buffer.y * terminal.cols + terminal.buffer.x, length: 0)
+    }
+
+    override func markedRange() -> NSRange {
+        guard let markedTextStorage else {
+            return NSRange(location: NSNotFound, length: 0)
+        }
+        return NSRange(location: 0, length: markedTextStorage.length)
+    }
+
+    override func hasMarkedText() -> Bool {
+        markedTextStorage != nil
+    }
+
+    override func attributedSubstring(
+        forProposedRange range: NSRange,
+        actualRange: NSRangePointer?
+    ) -> NSAttributedString? {
+        guard let markedTextStorage,
+              range.location != NSNotFound,
+              range.location < markedTextStorage.length
+        else { return nil }
+        let clampedRange = NSRange(
+            location: range.location,
+            length: min(range.length, markedTextStorage.length - range.location)
+        )
+        guard clampedRange.length > 0 else { return nil }
+        actualRange?.pointee = clampedRange
+        return markedTextStorage.attributedSubstring(from: clampedRange)
+    }
+
+    override func validAttributesForMarkedText() -> [NSAttributedString.Key] {
+        [.underlineStyle, .markedClauseSegment, .glyphInfo]
+    }
+
+    /// 未確定文字の内容と長さに合わせて overlay を更新する。空なら再描画のため view 階層から取り除く。
+    private func updateMarkedTextOverlay() {
+        guard let markedTextStorage, markedTextStorage.length > 0 else {
+            markedTextOverlay?.removeFromSuperview()
+            markedTextOverlay = nil
+            return
+        }
+
+        let overlay: NSTextField
+        if let markedTextOverlay {
+            overlay = markedTextOverlay
+        } else {
+            overlay = NSTextField(labelWithString: "")
+            overlay.isBezeled = false
+            overlay.isEditable = false
+            overlay.drawsBackground = true
+            overlay.wantsLayer = true
+            overlay.layer?.cornerRadius = 3
+            addSubview(overlay, positioned: .above, relativeTo: nil)
+            markedTextOverlay = overlay
+        }
+
+        overlay.backgroundColor = nativeBackgroundColor.withAlphaComponent(0.9)
+        let displayString = NSMutableAttributedString(attributedString: markedTextStorage)
+        displayString.addAttributes([
+            .font: font,
+            .foregroundColor: nativeForegroundColor,
+            .underlineStyle: NSUnderlineStyle.single.rawValue,
+        ], range: NSRange(location: 0, length: displayString.length))
+        overlay.attributedStringValue = displayString
+        overlay.sizeToFit()
+        overlay.frame.origin = caretFrame.origin
+        if overlay.frame.maxX > bounds.maxX {
+            overlay.frame.origin.x = max(0, bounds.maxX - overlay.frame.width)
+        }
+    }
+
+    /// 呼び出しを重ねても同じ空状態に収束する後始末。
+    private func clearMarkedText() {
+        markedTextStorage = nil
+        updateMarkedTextOverlay()
+    }
 
     /// attach 先がマウスレポート (DECSET 1000/1002/1003) を要求している状態か。
     /// false のときはローカルスクロールバックへ委ねるべきで、ホイールレポートは送らない。
