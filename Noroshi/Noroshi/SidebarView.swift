@@ -40,6 +40,11 @@ struct SidebarView: View {
                     ) {
                         appState.selectedSessionName = session.name
                     }
+                    .contextMenu {
+                        Button("サイドバーから削除", role: .destructive) {
+                            appState.removeSessionFromSidebar(session.name)
+                        }
+                    }
                 }
             }
             // フィルタ中は表示 index と全体順 (displaySessionNames) がずれ保存順が壊れるため、並べ替えを無効化する。
@@ -88,6 +93,22 @@ struct SidebarView: View {
             }
             .buttonStyle(.plain)
             .help("通知が来ている window だけ表示")
+            Menu {
+                if appState.availableSessions.isEmpty {
+                    Text("追加できる session はありません")
+                } else {
+                    ForEach(appState.availableSessions) { session in
+                        Button(session.name) {
+                            appState.addSessionToSidebar(session.name)
+                        }
+                    }
+                }
+            } label: {
+                Image(systemName: "plus")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .help("session をサイドバーに追加")
         }
         .font(.caption)
         .padding(.horizontal, 10)
