@@ -125,6 +125,39 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertNil(state.badges["@19"])
     }
 
+    @MainActor
+    func testSessionExpansionStateIsIdempotent() throws {
+        let suiteName = "TmuxModelsTests.testSessionExpansionStateIsIdempotent.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let state = AppState(client: TmuxClient(binaryPath: "/usr/bin/false"), defaults: defaults)
+
+        state.setSessionExpanded("Focus", isExpanded: false)
+        state.setSessionExpanded("Focus", isExpanded: false)
+        XCTAssertEqual(state.collapsedSessionNames, ["Focus"])
+
+        state.setSessionExpanded("Focus", isExpanded: true)
+        state.setSessionExpanded("Focus", isExpanded: true)
+        XCTAssertTrue(state.collapsedSessionNames.isEmpty)
+    }
+
+    @MainActor
+    func testRepeatedFocusRequestsAreDeliveredAsSeparateEvents() throws {
+        let suiteName = "TmuxModelsTests.testRepeatedFocusRequestsAreDeliveredAsSeparateEvents.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let state = AppState(client: TmuxClient(binaryPath: "/usr/bin/false"), defaults: defaults)
+
+        state.requestFocus(.sidebar)
+        let first = try XCTUnwrap(state.focusRequest)
+        state.requestFocus(.sidebar)
+        let second = try XCTUnwrap(state.focusRequest)
+
+        XCTAssertEqual(first.target, .sidebar)
+        XCTAssertEqual(second.target, .sidebar)
+        XCTAssertEqual(second.sequence, first.sequence + 1)
+    }
+
     func testLatestUnreadWindowID() {
         let base = Date(timeIntervalSince1970: 1_000)
         let history = [
