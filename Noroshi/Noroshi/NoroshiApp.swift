@@ -31,6 +31,11 @@ struct NoroshiApp: App {
         .commands {
             NavigationCommands(appState: appState)
         }
+
+        // Settings シーンを載せると SwiftUI が Cmd+, を自動でバインドする (issue #9)。
+        Settings {
+            SettingsView()
+        }
     }
 }
 
