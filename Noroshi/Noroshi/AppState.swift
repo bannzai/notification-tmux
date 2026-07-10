@@ -25,6 +25,10 @@ final class AppState: ObservableObject {
     @Published var lastError: String?
     /// コマンドパレット (cmd+P) の表示状態。true の間だけ terminal の上にオーバーレイを重ねる。
     @Published var isPalettePresented = false
+    /// サイドバー下部のフィルタ入力。session 名・window 名・index を部分一致で絞り込む。
+    @Published var sidebarQuery: String = ""
+    /// 通知フィルタ。true のとき未読 (badge > 0) の window だけをサイドバーに表示する。
+    @Published var showsNotifiedOnly: Bool = false
 
     /// Stop イベントの受信履歴 (古い順)。「最新の通知へジャンプ」の発生順解決に使う。バッジ台帳とは独立。
     private var notifications: [NotificationRecord] = []
@@ -49,6 +53,11 @@ final class AppState: ObservableObject {
     var displaySessions: [TmuxSession] {
         let sessionsByName = Dictionary(uniqueKeysWithValues: sessions.map { ($0.name, $0) })
         return displaySessionNames.compactMap { sessionsByName[$0] }
+    }
+
+    /// サイドバーが実際に列挙する session。表示順の displaySessions にフィルタ (テキスト + 通知) を適用する。
+    var filteredDisplaySessions: [TmuxSession] {
+        SidebarFilter.filteredSessions(displaySessions, query: sidebarQuery, showsNotifiedOnly: showsNotifiedOnly, badges: badges)
     }
 
     /// コマンドパレットが列挙する候補。表示順の session ごとに、session 行 → 配下 window 行の順で平坦化する。
