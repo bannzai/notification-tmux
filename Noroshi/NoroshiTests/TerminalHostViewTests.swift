@@ -1,0 +1,82 @@
+import AppKit
+import XCTest
+
+@testable import Noroshi
+
+@MainActor
+final class TerminalHostViewTests: XCTestCase {
+    func testMarkedTextIsPreviewedAndShortenedWithoutKeepingOldText() throws {
+        let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+
+        view.setMarkedText("にほんご", selectedRange: NSRange(location: 4, length: 0), replacementRange: noRange)
+
+        XCTAssertTrue(view.hasMarkedText())
+        XCTAssertEqual(view.markedRange(), NSRange(location: 0, length: 4))
+        XCTAssertEqual(try markedTextOverlay(in: view).stringValue, "にほんご")
+
+        view.setMarkedText("にほん", selectedRange: NSRange(location: 3, length: 0), replacementRange: noRange)
+
+        XCTAssertEqual(view.markedRange(), NSRange(location: 0, length: 3))
+        XCTAssertEqual(try markedTextOverlay(in: view).stringValue, "にほん")
+    }
+
+    func testNSStringMarkedTextIsPreviewedAndEmptyTextRemovesPreview() throws {
+        let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+
+        view.setMarkedText(NSString(string: "にほんご"), selectedRange: NSRange(location: 4, length: 0), replacementRange: noRange)
+        XCTAssertEqual(try markedTextOverlay(in: view).stringValue, "にほんご")
+
+        view.setMarkedText(NSString(string: ""), selectedRange: NSRange(location: 0, length: 0), replacementRange: noRange)
+        XCTAssertFalse(view.hasMarkedText())
+        XCTAssertFalse(view.subviews.contains { $0 is NSTextField && ($0 as? NSTextField)?.stringValue == "にほんご" })
+    }
+
+    func testUnmarkTextRemovesPreviewAndMarkedState() {
+        let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        view.setMarkedText("日本語", selectedRange: NSRange(location: 3, length: 0), replacementRange: noRange)
+
+        view.unmarkText()
+
+        XCTAssertFalse(view.hasMarkedText())
+        XCTAssertEqual(view.markedRange(), noRange)
+        XCTAssertFalse(view.subviews.contains { $0 is NSTextField && ($0 as? NSTextField)?.stringValue == "日本語" })
+    }
+
+    func testInsertTextClearsPreviewAndMarkedState() {
+        let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        view.setMarkedText("日本語", selectedRange: NSRange(location: 3, length: 0), replacementRange: noRange)
+
+        view.insertText("日本語", replacementRange: noRange)
+
+        XCTAssertFalse(view.hasMarkedText())
+        XCTAssertEqual(view.markedRange(), noRange)
+        XCTAssertFalse(view.subviews.contains { $0 is NSTextField && ($0 as? NSTextField)?.stringValue == "日本語" })
+    }
+
+    func testTextInputRangesExposeCompositionAndCursorPosition() throws {
+        let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        XCTAssertEqual(view.selectedRange(), NSRange(location: 0, length: 0))
+
+        view.setMarkedText("日本語", selectedRange: NSRange(location: 3, length: 0), replacementRange: noRange)
+
+        var actualRange = NSRange(location: NSNotFound, length: 0)
+        let substring = view.attributedSubstring(
+            forProposedRange: NSRange(location: 1, length: 2),
+            actualRange: &actualRange
+        )
+        XCTAssertEqual(actualRange, NSRange(location: 1, length: 2))
+        XCTAssertEqual(try XCTUnwrap(substring).string, "本語")
+        XCTAssertEqual(
+            Set(view.validAttributesForMarkedText()),
+            Set([.underlineStyle, .markedClauseSegment, .glyphInfo])
+        )
+    }
+
+    private var noRange: NSRange {
+        NSRange(location: NSNotFound, length: 0)
+    }
+
+    private func markedTextOverlay(in view: MouseReportingTerminalView) throws -> NSTextField {
+        try XCTUnwrap(view.subviews.compactMap { $0 as? NSTextField }.first { !$0.stringValue.isEmpty })
+    }
+}
