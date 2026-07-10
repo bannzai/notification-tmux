@@ -11,6 +11,12 @@ struct ContentView: View {
         } detail: {
             if let sessionName = appState.selectedSessionName {
                 TerminalHostView(sessionName: sessionName)
+            } else if !appState.sessions.isEmpty {
+                ContentUnavailableView(
+                    "session を追加してください",
+                    systemImage: "sidebar.left",
+                    description: Text("サイドバー下部の＋から表示する tmux session を選べます")
+                )
             } else {
                 ContentUnavailableView(
                     "tmux session がありません",

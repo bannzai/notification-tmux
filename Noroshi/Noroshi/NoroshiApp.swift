@@ -33,7 +33,8 @@ struct NoroshiApp: App {
                 ContentView()
                     .environmentObject(appState)
                     .onOpenURL { url in
-                        guard let event = StopEvent(url: url) else { return }
+                        guard let event = StopEvent(url: url),
+                              appState.sidebarSessionNames.contains(event.sessionName) else { return }
                         appState.apply(event: event)
                         NotificationService.shared.deliver(
                             event: event,
