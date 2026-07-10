@@ -5,7 +5,7 @@
 Claude Code が Stop すると狼煙が上がり、その狼煙が上がった window へ駆けつける、という体験から Noroshi と名付けた。
 
 - サイドバーに tmux の session(workspace) / window 一覧をツリー表示する
-- Claude Code の Stop hook から `noroshi://stop?session=<name>&window=@n` を受けて該当 window にバッジ数字を付ける（Dock アイコンには未読合計）
+- Claude Code の Stop hook から `noroshi://stop?session=<name>&window=@n` を受けて該当 window にバッジ数字を付け、macOS標準通知を表示する（Dock アイコンには未読合計）
 - バッジのある window はクリック、またはショートカットキーでジャンプできる。ジャンプすると該当 session のターミナルを表示して `tmux select-window` で該当 window まで開く
 - ターミナルは [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) の PTY で `tmux attach-session` する。表示中の session だけを attach する単一 attach 方式（後述）
 
@@ -15,8 +15,8 @@ Claude Code が Stop すると狼煙が上がり、その狼煙が上がった w
 | --- | --- | --- |
 | UI | SwiftUI (`Window` シーン + `NavigationSplitView`) | サイドバー (通知センター兼 workspace 一覧) と detail (ターミナル) |
 | ターミナル描画 | SwiftTerm 1.13.0 (SPM) の `LocalProcessTerminalView` | forkpty で `tmux attach-session -t =<session>` した PTY を VT100/xterm エミュレーションで描画。Ghostty テーマの配色を適用 |
-| tmux 連携 | `Process` で tmux CLI を実行 (`TmuxClient`) | `list-sessions` / `list-windows -a` の 2 秒ポーリングで一覧構築、`select-window -t @n` でジャンプ |
-| 通知イベント | URL スキーム `noroshi://` + `open -g` | Claude Code Stop hook → シェルスクリプト → LaunchServices → `onOpenURL` |
+| tmux 連携 | `Process` で tmux CLI を実行 (`TmuxClient`) | 2秒ポーリングで一覧構築、`select-window`でwindow移動、`switch-client`で同一clientのsession切替 |
+| 通知イベント | URL スキーム `noroshi://` + `UserNotifications` | Stop hook → LaunchServices → `onOpenURL` → macOS標準通知。通知タップで対象windowへ移動 |
 | 状態管理 | `AppState: ObservableObject` (@MainActor) | session 一覧・バッジ台帳 (windowID → 未読数)・通知履歴・選択状態 |
 | ショートカット | SwiftUI `Commands` (`NavigationCommands`) | session/window/pane 移動、最新通知へのジャンプ、テーマ再読み込み |
 | テスト | XCTest (app を TEST_HOST とするユニットテスト) | パーサ / URL イベント / バッジ台帳 / Ghostty テーマ解決 / ナビゲーション計算 |
@@ -36,16 +36,17 @@ Noroshi.app ◀─────────────────────�
   │    ├─ notifications: [NotificationRecord] ← 「最新の通知へジャンプ」の発生順解決に使用
   │    └─ selectedSessionName
   ├─ SidebarView — session → window ツリー + バッジ数字 (クリックで AppState.open(window:))
+  ├─ NotificationService — macOS標準通知を表示し、タップを AppState.open(event:) へ戻す
   └─ TerminalHostView (NSViewRepresentable)
        └─ TerminalSessionManager (単一 attach) が表示中 session の LocalProcessTerminalView を保持
             └─ PTY: tmux attach-session -t =<session>
-                     (session 切替時は直前の view を terminate して破棄し、新しい session に attach)
+                     (session 切替時は同じclientを switch-client。prefix+L の履歴も保持)
 ```
 
 ### 設計上のポイント
 
 - **window の識別子は tmux の window_id (`@n`) を SSOT にする**。サーバ全体でユニークで、session/window の改名・並べ替えの影響を受けない
-- **単一 attach 方式**（issue #6）: 常時 attach する terminal client は最大 1 本に限定し、表示中の session だけを attach する。session を切り替えると直前の view を `terminate()` して破棄してから新しい session に attach する。非表示 view を生かし続けないことで、attach client / VT パース / スクロールバックの多重コストを避ける
+- **単一 attach 方式**（issue #6 / #20）: terminal clientは常時最大1本。session切替は同じclientへの`switch-client`で行い、非表示viewを増やさずtmuxの直前session履歴も保持する。詳細は [ADR 0005](documents/adr/0005-switch-client-for-session-navigation.md) を参照
 - **独自 config + Ghostty テーマ対応**: アプリ独自の設定ファイル `~/.config/noroshi/config`（`XDG_CONFIG_HOME` を尊重、無ければ `~/.config/ghostty/config` にフォールバック）と、そこから参照される theme ファイルを読み、Ghostty と同じ意味論（theme が先に読まれ config の直接指定が上書きする）でマージした配色を SwiftTerm に適用する。ファイル形式は Ghostty config 互換で、`font-family` / `font-style` / `font-size` も反映する。config 編集後は再起動せず、メニュー「表示 > テーマを再読み込み」(cmd+shift+r) で反映できる。詳細は [ADR 0004](documents/adr/0004-noroshi-config-file.md) を参照
 - App Sandbox は無効 (homebrew の tmux を PTY で exec するため。SwiftTerm 公式の推奨)
 - 詳細な知見・ハマりどころは [docs/knowledge.md](docs/knowledge.md) を参照（v1 開発時の記録）
@@ -57,10 +58,11 @@ Noroshi.app ◀─────────────────────�
 | ショートカット | 動作 |
 | --- | --- |
 | `cmd+1` 〜 `cmd+9` | 表示順で該当番号の session に切り替える |
-| `cmd+j` | 表示中 session のカレント window を次に進める |
-| `cmd+k` | 表示中 session のカレント window を前に戻す |
+| `cmd+shift+]` | 表示中 session のカレント window を次に進める |
+| `cmd+shift+[` | 表示中 session のカレント window を前に戻す |
 | `cmd+shift+j` | 次の session に切り替える (循環) |
 | `cmd+shift+k` | 前の session に切り替える (循環) |
+| `cmd+n` | フォルダPickerを開き、そのフォルダを開始位置とする新規sessionを作る |
 | `cmd+shift+n` | 最も新しく受信し、かつ未読が残っている window へジャンプする |
 | `cmd+]` | 表示中 session のカレント window 内でアクティブ pane を次へ移す |
 | `cmd+[` | 表示中 session のカレント window 内でアクティブ pane を前へ移す |

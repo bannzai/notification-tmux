@@ -256,9 +256,9 @@ final class MouseReportingTerminalView: LocalProcessTerminalView {
     }
 }
 
-/// 表示中の session だけを attach する単一 attach 方式の terminal 管理 (issue #6 案 A)。
-/// 常時 attach client は最大 1 本。session 切替時に直前の view を terminate して破棄し、新しい session に attach する。
-/// 非表示 view を生かし続けないことで、attach client / VT パース / スクロールバックの多重コストを避ける。
+/// 表示中の session だけを attach する単一 attach 方式の terminal 管理 (issue #6)。
+/// 常時 attach client は最大 1 本。session 切替時は同じ client を `switch-client` し、tmux の直前session履歴を保つ。
+/// 非表示 view を増やさないことで、attach client / VT パース / スクロールバックの多重コストを避ける。
 /// NSObject 継承は LocalProcessTerminalViewDelegate が要求するため。
 @MainActor
 final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
@@ -268,24 +268,49 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     private var currentSessionName: String?
     /// 現在 attach 中の terminal view。
     private var currentView: MouseReportingTerminalView?
+    /// attach済みclientの照会とsession切替に使うtmux CLIラッパ。
+    private let tmuxClient = TmuxClient()
     /// Ghostty config 由来の配色。起動時に一度読み、メニュー「テーマを再読み込み」で更新する。config が無ければ nil。
     private var theme = GhosttyTheme.load()
     /// ホイール / ドラッグを横取りして tmux へマウスレポートを送るための local event monitor。生成後は最大 1 本。
     private var mouseMonitor: Any?
 
-    /// session に attach した terminal view を返す。別 session が表示中なら、その view を破棄してから新規 attach する。
-    /// 同じ session の再要求では既存 view をそのまま返す (再 attach しない)。
+    /// session に attach した terminal view を返す。別sessionなら同じclientをswitchして履歴を保持する。
+    /// client特定前などswitchできない場合だけ、従来どおりviewを作り直して表示自体は継続する。
     func terminalView(for sessionName: String) -> LocalProcessTerminalView {
         if currentSessionName == sessionName, let view = currentView {
             return view
         }
-        if let old = currentView {
-            old.terminate()
+        if let view = currentView {
+            do {
+                try tmuxClient.switchClient(pid: view.process.shellPid, to: sessionName)
+                currentSessionName = sessionName
+                return view
+            } catch {
+                view.terminate()
+                currentView = nil
+                currentSessionName = nil
+            }
         }
         let view = makeTerminalView(for: sessionName)
         currentView = view
         currentSessionName = sessionName
         return view
+    }
+
+    /// SwiftTermが起動したtmux clientのPID。まだattachしていなければnil。
+    var attachedClientPID: Int32? {
+        guard let view = currentView, view.process.running else { return nil }
+        return view.process.shellPid
+    }
+
+    /// managerが最後に反映したsession名。AppStateの新しい選択がまだViewへ届いていない状態との判別に使う。
+    var managedSessionName: String? { currentSessionName }
+
+    /// `prefix + L` 等でtmux内からsessionが変わった時、管理中のsession名を実態へ合わせる。
+    func synchronizeCurrentSessionName(_ sessionName: String) {
+        guard currentView != nil else { return }
+        currentSessionName = sessionName
     }
 
     /// 表示コンテナが破棄されたとき、そのコンテナ内の現行 terminal を終了して attach を手放す。
@@ -404,7 +429,7 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
 }
 
 /// 選択中 session の terminal を表示する SwiftUI ラッパ。
-/// session 切り替え時は単一 attach 方式に従い、直前の view を破棄して新しい session に attach する。
+/// session 切り替え時は単一 attach 方式に従い、同じtmux clientの接続先を切り替える。
 struct TerminalHostView: NSViewRepresentable {
     /// 表示する tmux session 名。
     let sessionName: String
@@ -424,12 +449,16 @@ struct TerminalHostView: NSViewRepresentable {
         TerminalSessionManager.shared.detachTerminal(from: container)
     }
 
-    /// sessionName の terminal view をコンテナに取り付け、新規取り付け時だけフォーカスを当てる。
+    /// sessionName の terminal view をコンテナに取り付け、新規取り付け時またはsession切替時にフォーカスを当てる。
     private func install(on container: NSView) {
-        let terminal = TerminalSessionManager.shared.terminalView(for: sessionName)
-        // superview が変わっていない (ポーリング由来の再描画) 場合は取り付けもフォーカス移動もしない。
-        // 毎回 makeFirstResponder するとサイドバー等からフォーカスを奪ってしまうため新規取り付け時のみに限定する。
-        guard terminal.superview !== container else { return }
+        let manager = TerminalSessionManager.shared
+        let didChangeSession = manager.managedSessionName != sessionName
+        let terminal = manager.terminalView(for: sessionName)
+        // ポーリング由来の再描画ではフォーカスを奪わず、同じviewをswitch-clientした場合だけterminalへ戻す。
+        guard terminal.superview !== container else {
+            if didChangeSession { focus(terminal) }
+            return
+        }
         container.subviews.forEach { $0.removeFromSuperview() }
         terminal.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(terminal)
@@ -439,6 +468,10 @@ struct TerminalHostView: NSViewRepresentable {
             terminal.topAnchor.constraint(equalTo: container.topAnchor),
             terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
+        focus(terminal)
+    }
+
+    private func focus(_ terminal: LocalProcessTerminalView) {
         // updateNSView の同期処理中に firstResponder を変えると SwiftUI の更新と競合するため次の runloop に回す
         DispatchQueue.main.async {
             if let window = terminal.window, window.firstResponder !== terminal {

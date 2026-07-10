@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// 通知センターを兼ねるサイドバー。session(workspace) ごとに window を列挙し、未読バッジを数字で表示する。
@@ -138,21 +139,32 @@ struct SessionHeader: View {
     let session: TmuxSession
     /// session 配下の未読数合計。
     let badge: Int
-    /// terminal 表示中の session かどうか。選択中はアクセントカラーで強調する。
+    /// terminal 表示中の session かどうか。選択中はmacOS標準の選択色で強調する。
     let isSelected: Bool
     /// クリック時の動作。
     let action: () -> Void
+
+    private var selectedBackground: Color { Color(nsColor: .selectedContentBackgroundColor) }
+    private var selectedForeground: Color { Color(nsColor: .selectedMenuItemTextColor) }
 
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
                 Image(systemName: "terminal")
-                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    .foregroundStyle(isSelected ? selectedForeground : .secondary)
                 Text(session.name)
                     .fontWeight(isSelected ? .semibold : .regular)
-                    .foregroundStyle(isSelected ? Color.accentColor : .primary)
+                    .foregroundStyle(isSelected ? selectedForeground : .primary)
                 Spacer()
                 BadgeLabel(count: badge)
+            }
+            .padding(.vertical, 5)
+            .padding(.horizontal, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 6).fill(selectedBackground)
+                }
             }
             .contentShape(Rectangle())
         }
@@ -166,29 +178,34 @@ struct WindowRow: View {
     let window: TmuxWindow
     /// この window の未読数。
     let badge: Int
-    /// 選択中 session の tmux アクティブ window (= いま表示中の window) かどうか。アクセント背景で強調する。
+    /// 選択中 session の tmux アクティブ window (= いま表示中の window) かどうか。標準の選択色で強調する。
     let isSelected: Bool
     /// クリック時の動作。
     let action: () -> Void
 
+    private var selectedBackground: Color { Color(nsColor: .selectedContentBackgroundColor) }
+    private var selectedForeground: Color { Color(nsColor: .selectedMenuItemTextColor) }
+
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                // tmux 上のアクティブ window は緑丸ではなく index の着色で控えめに示す (通知バッジとの誤認を避ける)。
+                // 選択中session以外のactive window番号は青くせず、実際に表示中のwindowだけ選択色にする。
                 Text(String(window.index))
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(window.isActive ? Color.accentColor : .secondary)
+                    .foregroundStyle(isSelected ? selectedForeground : .secondary)
                 Text(window.name)
                     .lineLimit(1)
                     .fontWeight(isSelected ? .semibold : .regular)
+                    .foregroundStyle(isSelected ? selectedForeground : .primary)
                 Spacer()
                 BadgeLabel(count: badge)
             }
-            .padding(.vertical, 2)
-            .padding(.horizontal, 6)
+            .padding(.vertical, 5)
+            .padding(.horizontal, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 if isSelected {
-                    RoundedRectangle(cornerRadius: 6).fill(Color.accentColor.opacity(0.18))
+                    RoundedRectangle(cornerRadius: 6).fill(selectedBackground)
                 }
             }
             .contentShape(Rectangle())
