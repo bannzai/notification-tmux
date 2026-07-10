@@ -38,6 +38,8 @@ enum TmuxFormat {
     static let windowFormat = "#{session_name}\u{1f}#{window_id}\u{1f}#{window_index}\u{1f}#{window_name}\u{1f}#{window_active}\u{1f}#{window_panes}"
     /// `list-sessions -F` 用。
     static let sessionFormat = "#{session_name}\u{1f}#{session_attached}"
+    /// `list-clients -F` 用。SwiftTerm の子 PID から Noroshi 自身の tmux client を特定する。
+    static let clientFormat = "#{client_pid}\u{1f}#{client_tty}\u{1f}#{session_name}"
 
     /// `windowFormat` で出力された 1 行を TmuxWindow にする。形式が合わない行は nil。
     static func parseWindowLine(_ line: String) -> TmuxWindow? {
@@ -55,6 +57,17 @@ enum TmuxFormat {
         let parts = line.split(separator: fieldSeparator, omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 2, let attached = Int(parts[1]) else { return nil }
         return (parts[0], attached)
+    }
+
+    /// `clientFormat` で出力された 1 行を tmux client 情報にする。形式が合わない行は nil。
+    static func parseClientLine(_ line: String) -> TmuxAttachedClient? {
+        let parts = line.split(separator: fieldSeparator, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 3,
+              let pid = Int32(parts[0]),
+              !parts[1].isEmpty,
+              !parts[2].isEmpty
+        else { return nil }
+        return TmuxAttachedClient(pid: pid, tty: parts[1], sessionName: parts[2])
     }
 }
 
@@ -78,6 +91,46 @@ struct StopEvent: Equatable {
         sessionName = session
         windowID = window
     }
+
+    /// macOS 通知の userInfo から Stop イベントを復元する。
+    init?(userInfo: [AnyHashable: Any]) {
+        guard let session = userInfo["session"] as? String,
+              let window = userInfo["window"] as? String,
+              !session.isEmpty,
+              window.hasPrefix("@")
+        else { return nil }
+        sessionName = session
+        windowID = window
+    }
+
+    /// macOS 通知へ保存できる property list 形式の値。
+    var userInfo: [String: String] {
+        ["session": sessionName, "window": windowID]
+    }
+}
+
+/// Noroshi が attach している tmux client。PID で SwiftTerm の子プロセスと対応付ける。
+struct TmuxAttachedClient: Equatable {
+    let pid: Int32
+    let tty: String
+    let sessionName: String
+}
+
+/// フォルダPickerから作るsession名を決定する純粋ロジック。
+enum TmuxSessionNaming {
+    /// フォルダ名を基準にし、既存名と重なる場合は `-2`, `-3` と連番を付ける。
+    static func availableName(for directory: URL, existingNames: Set<String>) -> String {
+        let directoryName = directory.standardizedFileURL.lastPathComponent
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseName = directoryName.isEmpty ? "session" : directoryName
+        guard existingNames.contains(baseName) else { return baseName }
+
+        var suffix = 2
+        while existingNames.contains("\(baseName)-\(suffix)") {
+            suffix += 1
+        }
+        return "\(baseName)-\(suffix)"
+    }
 }
 
 /// Stop hook 由来の通知 1 件の受信記録。「最新の通知へジャンプ」(cmd+shift+n) の解決に使う。
@@ -91,6 +144,18 @@ struct NotificationRecord: Equatable {
 
 /// session/window の移動先を計算する純粋ロジック。実 tmux に依存しないためユニットテスト可能。
 enum NoroshiNavigation {
+    /// tmux clientの実接続先をアプリ選択へ反映すべきか判定する。
+    /// managerとapp選択がずれている間はView更新待ちなので、古いattach先へ戻さない。
+    static func shouldFollowAttachedSession(
+        selected: String?,
+        managed: String?,
+        attached: String?,
+        availableNames: Set<String>
+    ) -> Bool {
+        guard let attached, availableNames.contains(attached) else { return false }
+        return attached != selected && managed == selected
+    }
+
     /// 表示順 sessionNames の中で current から offset だけ移動した session 名を返す (末尾↔先頭で循環)。
     /// current が nil または一覧に無い場合は先頭を返す。
     static func adjacentSessionName(in sessionNames: [String], from current: String?, offset: Int) -> String? {

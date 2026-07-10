@@ -1,4 +1,5 @@
 import XCTest
+import UserNotifications
 @testable import Noroshi
 
 /// tmux フォーマット出力のパーサ・StopEvent URL・バッジ台帳・通知履歴解決・隣接計算のユニットテスト。
@@ -36,6 +37,15 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertNil(TmuxFormat.parseSessionLine("no-separator"))
     }
 
+    func testParseClientLine() {
+        XCTAssertEqual(
+            TmuxFormat.parseClientLine("1234\u{1f}/dev/ttys001\u{1f}Focus"),
+            TmuxAttachedClient(pid: 1234, tty: "/dev/ttys001", sessionName: "Focus")
+        )
+        XCTAssertNil(TmuxFormat.parseClientLine("not-a-pid\u{1f}/dev/ttys001\u{1f}Focus"))
+        XCTAssertNil(TmuxFormat.parseClientLine("1234\u{1f}\u{1f}Focus"))
+    }
+
     func testStopEventFromURL() throws {
         let event = StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Focus&window=@18")))
         XCTAssertEqual(event?.sessionName, "Focus")
@@ -47,6 +57,27 @@ final class TmuxModelsTests: XCTestCase {
             StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=sukidayo%2FRiamo&window=@5")))?.sessionName,
             "sukidayo/Riamo"
         )
+    }
+
+    func testStopEventNotificationUserInfoRoundTrip() throws {
+        let original = try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Focus&window=@18"))))
+        XCTAssertEqual(StopEvent(userInfo: original.userInfo), original)
+        XCTAssertNil(StopEvent(userInfo: ["session": "Focus", "window": "18"]))
+    }
+
+    @MainActor
+    func testNativeNotificationContentContainsWindowAndTapDestination() throws {
+        let event = try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Focus&window=@18"))))
+        let window = TmuxWindow(
+            id: "@18", sessionName: "Focus", index: 3,
+            name: "build", isActive: false, paneCount: 1)
+
+        let content = NotificationService.makeContent(event: event, window: window)
+
+        XCTAssertEqual(content.title, "Focus")
+        XCTAssertEqual(content.body, "[3] build で処理が停止しました")
+        XCTAssertEqual(StopEvent(userInfo: content.userInfo), event)
+        XCTAssertEqual(content.sound, .default)
     }
 
     func testStopEventRejectsInvalidURL() throws {
@@ -106,6 +137,21 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertNil(NoroshiNavigation.adjacentSessionName(in: [], from: "A", offset: 1))
     }
 
+    func testAttachedSessionFollowDistinguishesTmuxSwitchFromPendingAppSelection() {
+        let available: Set<String> = ["A", "B"]
+        // appとmanagerがBで一致し、clientだけAへ変わった = prefix+L等のtmux内操作。
+        XCTAssertTrue(NoroshiNavigation.shouldFollowAttachedSession(
+            selected: "B", managed: "B", attached: "A", availableNames: available))
+        // appがBを選んだ直後だがmanager/clientはまだA = View更新待ちなのでAへ戻さない。
+        XCTAssertFalse(NoroshiNavigation.shouldFollowAttachedSession(
+            selected: "B", managed: "A", attached: "A", availableNames: available))
+        // 消えたsessionや同一sessionは追随対象ではない。
+        XCTAssertFalse(NoroshiNavigation.shouldFollowAttachedSession(
+            selected: "B", managed: "B", attached: "C", availableNames: available))
+        XCTAssertFalse(NoroshiNavigation.shouldFollowAttachedSession(
+            selected: "B", managed: "B", attached: "B", availableNames: available))
+    }
+
     func testSessionNameAtDisplayIndex() {
         let names = ["A", "B", "C"]
         XCTAssertEqual(NoroshiNavigation.sessionName(in: names, atDisplayIndex: 0), "A")
@@ -144,6 +190,18 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertEqual(
             NoroshiNavigation.resolvedSessionOrder(savedOrder: ["Z"], currentNames: ["A", "B"]),
             ["A", "B"]
+        )
+    }
+
+
+    func testAvailableSessionNameUsesDirectoryAndNextFreeSuffix() {
+        let directory = URL(fileURLWithPath: "/Users/example/project")
+        XCTAssertEqual(TmuxSessionNaming.availableName(for: directory, existingNames: []), "project")
+        XCTAssertEqual(
+            TmuxSessionNaming.availableName(
+                for: directory,
+                existingNames: ["project", "project-2", "project-4"]),
+            "project-3"
         )
     }
 }

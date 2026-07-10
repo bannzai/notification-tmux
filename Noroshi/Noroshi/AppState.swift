@@ -100,8 +100,14 @@ final class AppState: ObservableObject {
     /// tmux から一覧を取り直し、消えた window のバッジを掃除する。
     func refresh() async {
         let client = self.client
+        let attachedClientPID = TerminalSessionManager.shared.attachedClientPID
+        let managedSessionName = TerminalSessionManager.shared.managedSessionName
         do {
-            let fetched = try await Task.detached(priority: .utility) { try client.fetchSessions() }.value
+            let (fetched, attachedSessionName) = try await Task.detached(priority: .utility) {
+                let sessions = try client.fetchSessions()
+                let attachedSession = try attachedClientPID.flatMap { try client.attachedClient(pid: $0)?.sessionName }
+                return (sessions, attachedSession)
+            }.value
             // 変化が無い時は再代入せず、2 秒ポーリング由来の不要な再描画 (terminal のフォーカス奪取等) を避ける。
             if fetched != sessions { sessions = fetched }
             syncSessionOrder()
@@ -110,7 +116,18 @@ final class AppState: ObservableObject {
             badges = badges.filter { alive.contains($0.key) }
             // 未選択、または選択中の session が消えた (kill 等) 場合は表示順の先頭にフォールバックする。
             // これが「消えた session への再 attach ループ」を止めるガード (単一 attach の TerminalSessionManager と対で機能する)。
-            if selectedSessionName == nil || !fetched.contains(where: { $0.name == selectedSessionName }) {
+            if NoroshiNavigation.shouldFollowAttachedSession(
+                selected: selectedSessionName,
+                managed: managedSessionName,
+                attached: attachedSessionName,
+                availableNames: Set(fetched.map(\.name))),
+               let attachedSessionName
+            {
+                // prefix+L / choose-tree 等、tmux内で行われたsession切替をアプリ側の選択へ反映する。
+                // manager側も先に同期し、View更新時に同じsessionへswitchし直して履歴を壊さないようにする。
+                TerminalSessionManager.shared.synchronizeCurrentSessionName(attachedSessionName)
+                selectedSessionName = attachedSessionName
+            } else if selectedSessionName == nil || !fetched.contains(where: { $0.name == selectedSessionName }) {
                 selectedSessionName = displaySessionNames.first
             }
             updateDockBadge()
@@ -136,6 +153,59 @@ final class AppState: ObservableObject {
             notifications.removeFirst(notifications.count - Self.notificationHistoryLimit)
         }
         updateDockBadge()
+    }
+
+    /// 指定IDのwindowを現在の一覧から返す。通知本文と通知タップの遷移先解決に使う。
+    func window(id: String) -> TmuxWindow? {
+        sessions.lazy.flatMap(\.windows).first(where: { $0.id == id })
+    }
+
+    /// macOS通知をタップした時に対象windowを開く。一覧に無ければ一度更新してから解決する。
+    func open(event: StopEvent) {
+        Task {
+            if let window = window(id: event.windowID) {
+                open(window: window)
+                return
+            }
+            await refresh()
+            if let window = window(id: event.windowID) {
+                open(window: window)
+            }
+        }
+    }
+
+    /// 新規sessionの開始フォルダを選ぶPickerを表示する。同時に複数のPickerは開かない。
+    func presentNewSessionPicker() {
+        guard !NSApp.windows.contains(where: { $0 is NSOpenPanel }) else { return }
+        let panel = NSOpenPanel()
+        panel.title = "新規tmux session"
+        panel.message = "sessionを開始するフォルダを選択してください"
+        panel.prompt = "作成"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = true
+        panel.begin { [weak self] response in
+            guard response == .OK, let directory = panel.url else { return }
+            Task { @MainActor in
+                self?.createSession(directory: directory)
+            }
+        }
+    }
+
+    /// ユーザーの明示操作ごとに新しいtmux sessionを作るため、意図的に非冪等。
+    /// TmuxClient側で既存名を避け、作成済みsessionを上書きしない。
+    private func createSession(directory: URL) {
+        let client = self.client
+        Task.detached(priority: .userInitiated) {
+            do {
+                let sessionName = try client.createSession(directory: directory)
+                await self.refresh()
+                await MainActor.run { self.selectedSessionName = sessionName }
+            } catch {
+                await MainActor.run { self.lastError = "\(error)" }
+            }
+        }
     }
 
     /// session 配下の未読数合計。session 行のバッジに使う。
@@ -179,7 +249,7 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 表示中 session のカレント window を次 (+1) / 前 (-1) に移す (cmd+j/k)。
+    /// 表示中 session のカレント window を次 (+1) / 前 (-1) に移す (cmd+shift+] / cmd+shift+[)。
     /// 移動後、新しいアクティブ window のバッジをクリアして一覧を更新する。
     func moveWindow(_ offset: Int) {
         guard let session = selectedSessionName else { return }

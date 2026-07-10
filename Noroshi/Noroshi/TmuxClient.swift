@@ -3,11 +3,14 @@ import Foundation
 /// tmux コマンドの実行失敗。stderr をそのまま保持する。
 enum TmuxClientError: Error, CustomStringConvertible {
     case commandFailed(status: Int32, stderr: String)
+    case clientNotFound(pid: Int32)
 
     var description: String {
         switch self {
         case .commandFailed(let status, let stderr):
             return "tmux exited with status \(status): \(stderr)"
+        case .clientNotFound(let pid):
+            return "tmux client for pid \(pid) was not found"
         }
     }
 
@@ -18,6 +21,8 @@ enum TmuxClientError: Error, CustomStringConvertible {
         switch self {
         case .commandFailed(_, let stderr):
             return stderr.contains("no server running") || stderr.contains("error connecting")
+        case .clientNotFound:
+            return false
         }
     }
 }
@@ -78,10 +83,44 @@ struct TmuxClient {
             }
     }
 
+    /// 指定フォルダを開始位置とするtmux sessionを、既存名と重ならない名前で新規作成する。
+    /// ユーザーが明示的に新規sessionを要求する操作なので、この関数自体は意図的に非冪等。
+    /// 名前決定は毎回最新の一覧から行い、同名sessionを上書きしない。
+    func createSession(directory: URL) throws -> String {
+        let existingNames: Set<String>
+        do {
+            existingNames = Set(try run(["list-sessions", "-F", "#{session_name}"])
+                .split(separator: "\n")
+                .map(String.init))
+        } catch let error as TmuxClientError where error.isNoServer {
+            existingNames = []
+        }
+
+        let name = TmuxSessionNaming.availableName(for: directory, existingNames: existingNames)
+        try run(["new-session", "-d", "-s", name, "-c", directory.standardizedFileURL.path])
+        return name
+    }
+
     /// window_id (@n) を指定して、その window が属する session のカレント window を切り替える。
     /// window_id はサーバ全体で一意なので session 指定は不要。
     func selectWindow(id: String) throws {
         try run(["select-window", "-t", id])
+    }
+
+    /// SwiftTerm が起動したtmux clientのPIDから、client ttyと現在のsessionを取得する。
+    func attachedClient(pid: Int32) throws -> TmuxAttachedClient? {
+        try run(["list-clients", "-F", TmuxFormat.clientFormat])
+            .split(separator: "\n")
+            .compactMap { TmuxFormat.parseClientLine(String($0)) }
+            .first(where: { $0.pid == pid })
+    }
+
+    /// 同じtmux clientを別sessionへ切り替える。clientを作り直さないため `prefix + L` の履歴が保たれる。
+    func switchClient(pid: Int32, to session: String) throws {
+        guard let attachedClient = try attachedClient(pid: pid) else {
+            throw TmuxClientError.clientNotFound(pid: pid)
+        }
+        try run(["switch-client", "-c", attachedClient.tty, "-t", "=\(session)"])
     }
 
     /// session のカレント window を次の window に切り替える (末尾↔先頭で循環; tmux ネイティブ挙動)。
