@@ -62,6 +62,8 @@ Noroshi.app ◀─────────────────────�
 | `cmd+shift+[` | 表示中 session のカレント window を前に戻す |
 | `cmd+shift+j` | 次の session に切り替える (循環) |
 | `cmd+shift+k` | 前の session に切り替える (循環) |
+| `cmd+option+s` | サイドバーの選択中 session にフォーカスする |
+| `cmd+option+t` | ターミナルにフォーカスする |
 | `cmd+n` | フォルダPickerを開き、そのフォルダを開始位置とする新規sessionを作る |
 | `cmd+shift+n` | 最も新しく受信し、かつ未読が残っている window へジャンプする |
 | `cmd+]` | 表示中 session のカレント window 内でアクティブ pane を次へ移す |
