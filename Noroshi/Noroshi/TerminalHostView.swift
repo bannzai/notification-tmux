@@ -240,7 +240,8 @@ final class MouseReportingTerminalView: LocalProcessTerminalView {
     }
 
     /// 表示中フォントの 1 セル寸法 (pt)。getOptimalFrameSize() は width=cell*cols+scroller幅 / height=cell*rows を返すため逆算する。
-    private func cellSize() -> CGSize {
+    /// リンククリック検出のため TerminalSessionManager (同一ファイル) から参照するので fileprivate。
+    fileprivate func cellSize() -> CGSize {
         let optimal = getOptimalFrameSize()
         return CGSize(
             width: (optimal.width - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)) / CGFloat(getTerminal().cols),
@@ -248,7 +249,8 @@ final class MouseReportingTerminalView: LocalProcessTerminalView {
     }
 
     /// event の位置を可視画面の 0-based セル座標へ変換する。SwiftTerm の calculateMouseHit と同じ式。
-    private func gridPosition(for event: NSEvent, cell: CGSize) -> (col: Int, row: Int) {
+    /// リンククリック検出のため TerminalSessionManager (同一ファイル) から参照するので fileprivate。
+    fileprivate func gridPosition(for event: NSEvent, cell: CGSize) -> (col: Int, row: Int) {
         let point = convert(event.locationInWindow, from: nil)
         return (
             col: min(max(0, Int(point.x / cell.width)), getTerminal().cols - 1),
@@ -274,6 +276,8 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     private var theme = GhosttyTheme.load()
     /// ホイール / ドラッグを横取りして tmux へマウスレポートを送るための local event monitor。生成後は最大 1 本。
     private var mouseMonitor: Any?
+    /// 左ボタン押下時のセル座標。押下と同一セルで離した場合だけクリックとみなしリンクを開くための記録。
+    private var mouseDownCell: (col: Int, row: Int)?
 
     /// session に attach した terminal view を返す。別sessionなら同じclientをswitchして履歴を保持する。
     /// client特定前などswitchできない場合だけ、従来どおりviewを作り直して表示自体は継続する。
@@ -340,6 +344,10 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         installMouseMonitorIfNeeded()
         let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
         view.processDelegate = self
+        // SwiftTerm 自身の暗黙 URL 検出による自動オープンを止める。リンクオープンは Noroshi が独自のクリック検出で行うため二重化させない。
+        // .alwaysWithModifier では linkForClick が暗黙リンク (match.isExplicit == false) を常に nil 扱いにするので、
+        // client と tmux window の桁数不一致で折返しが崩れた時に SwiftTerm が誤結合した URL を開く不具合を防げる (LinkHighlightMode に無効化 case が無いための代替)。
+        view.linkHighlightMode = .alwaysWithModifier
         // `=` プレフィックスで session 名の完全一致を強制 (前方一致による誤 attach を防ぐ)
         // Noroshi の画面サイズで他 client の window を resize しないよう ignore-size で attach する。
         view.startProcess(
@@ -388,7 +396,7 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         guard mouseMonitor == nil else { return }
         // NSEvent は Sendable でないため、MainActor 境界は Bool (消費したか) だけを跨がせ、
         // event / nil の選択は境界の外で行う。monitor は常に main スレッドで発火するので assumeIsolated は安全。
-        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged]) { event in
+        mouseMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel, .leftMouseDragged, .leftMouseDown, .leftMouseUp]) { event in
             MainActor.assumeIsolated {
                 TerminalSessionManager.shared.reportMouseEventIfHandled(event)
             } ? nil : event
@@ -396,8 +404,12 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// 表示中 terminal view の上で起きたホイール / 左ドラッグならマウスレポートを送り、消費した (true) を返す。
+    /// 左クリック (押下と同一セルでの離し) はリンクを開くが、選択やマウスレポートを壊さないため消費せず false を返す。
     /// 対象外なら false を返し、呼び出し側でイベントを既定処理へ通す。
     private func reportMouseEventIfHandled(_ event: NSEvent) -> Bool {
+        // terminal 外の押下でも記録を必ず作り直す。外で押して view 内の古い記録セルと同じ位置で
+        // 離した場合に、下の guard を通過した up が古い記録とマッチしてリンクを誤って開くのを防ぐ。
+        if event.type == .leftMouseDown { mouseDownCell = nil }
         guard let view = currentView,
               event.window === view.window,
               view.bounds.contains(view.convert(event.locationInWindow, from: nil))
@@ -415,8 +427,80 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
             guard view.wantsDragMotionReport else { return false }
             view.reportDragMotion(with: event)
             return true
+        case .leftMouseDown:
+            // 押下セルを記録するだけで消費しない。SwiftTerm のローカル選択開始を壊さないため常に素通しする。
+            mouseDownCell = view.gridPosition(for: event, cell: view.cellSize())
+            return false
+        case .leftMouseUp:
+            // 押下と同一セルで離した (ドラッグ選択でない) 素のクリックだけリンクを開く。up は消費しない。
+            defer { mouseDownCell = nil }
+            guard let downCell = mouseDownCell,
+                  downCell == view.gridPosition(for: event, cell: view.cellSize())
+            else { return false }
+            openLinkIfClicked(at: downCell, in: view)
+            return false
         default:
             return false
+        }
+    }
+
+    /// クリックされたセルのテキストからリンクを検出し、URL はブラウザ、存在するファイルパスは対応アプリで開く。
+    /// monitor コールバックを止めないよう Task で非同期に検出し、実解決 (tmux 照会・存在確認) は open 側でメインスレッド外へ逃がす。
+    /// 検出できない・存在しないパスでは何もしないため、同じクリックを繰り返しても副作用は open のみに閉じる。
+    private func openLinkIfClicked(at cell: (col: Int, row: Int), in view: MouseReportingTerminalView) {
+        Task { @MainActor in
+            let terminal = view.getTerminal()
+            // ワイド文字直後の code 0 スペーサを NUL 文字として混入させないため両変換で skipNullCellsFollowingWide を有効化し、
+            // 行結合 (rowTexts) とクリック列 (clickColumnInRow) の文字空間での数え方を一致させる。
+            // 行境界の折返し継続は SwiftTerm の実 wrap 情報 (wrapsToNextRow) で判定し、桁数不一致で tmux がクリップ描画した行の誤結合を防ぐ。
+            guard let logicalLine = TerminalLinkDetector.logicalLine(
+                rowTexts: (0 ..< terminal.rows).map { terminal.getLine(row: $0)?.translateToString(trimRight: true, skipNullCellsFollowingWide: true) ?? "" },
+                filledToEdge: (0 ..< terminal.rows).map { wrapsToNextRow(terminal, screenRow: $0) },
+                clickRow: cell.row,
+                clickColumnInRow: terminal.getLine(row: cell.row)?
+                    .translateToString(trimRight: false, startCol: 0, endCol: cell.col, skipNullCellsFollowingWide: true).count ?? 0),
+                let link = TerminalLinkDetector.detectLink(logicalLine: logicalLine.text, column: logicalLine.column)
+            else { return }
+            await open(link)
+        }
+    }
+
+    /// 画面行 screenRow の次行 (screenRow+1) が折返し継続かを SwiftTerm の実 wrap 情報から推定する。
+    /// getText は wrapped 境界で改行を挟まず、ハード改行境界では "\n" を挟む (SwiftTerm の getSelectedLines が
+    /// isWrapped を見て newLine fragment を入れるため)。internal な isWrapped を公開 API だけで代替判定する。
+    /// これにより tmux が桁数不一致でクリップ描画した (折返しでない) 行が隣接行と誤結合するのを防ぐ。
+    /// getText の Position.row は絶対バッファ行なので画面行に buffer.yDisp を加える。
+    private func wrapsToNextRow(_ terminal: Terminal, screenRow: Int) -> Bool {
+        guard screenRow + 1 < terminal.rows else { return false }
+        return !terminal.getText(
+            start: Position(col: 0, row: screenRow + terminal.buffer.yDisp),
+            end: Position(col: terminal.cols, row: screenRow + 1 + terminal.buffer.yDisp)
+        ).contains("\n")
+    }
+
+    /// 検出済みリンクを開く。相対パスのときだけ表示中 session のアクティブ pane カレントパスを基準に解決し、存在するもののみ開く。
+    /// paneCurrentPath の tmux CLI 同期実行と fileExists は Process ブロッキングを伴うため Task.detached でメインスレッド外へ逃がし、
+    /// NSWorkspace.open だけ main で行う。MainActor 隔離の tmuxClient / currentSessionName は detached へ渡す前に取り出す。
+    private func open(_ link: TerminalLink) async {
+        switch link {
+        case .url(let url):
+            NSWorkspace.shared.open(url)
+        case .path(let path):
+            let tmuxClient = self.tmuxClient
+            let sessionName = currentSessionName
+            guard let resolved = await Task.detached(priority: .userInitiated, operation: { () -> String? in
+                guard let resolved = TerminalLinkDetector.resolvePath(
+                    path,
+                    homeDirectory: NSHomeDirectory(),
+                    baseDirectory: TerminalLinkDetector.requiresBaseDirectory(path)
+                        ? sessionName.flatMap { try? tmuxClient.paneCurrentPath(session: $0) }
+                        : nil),
+                    FileManager.default.fileExists(atPath: resolved)
+                else { return nil }
+                return resolved
+            }).value
+            else { return }
+            NSWorkspace.shared.open(URL(fileURLWithPath: resolved))
         }
     }
 
