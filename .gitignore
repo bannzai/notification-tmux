@@ -24,6 +24,5 @@ var/
 # macOS
 .DS_Store
 
-# グローバル gitignore (~/.gitignore) は .plans を除外しているが、
-# このリポジトリではプランを git 管理するため打ち消す
-!.plans/
+# プランは git 管理しない (グローバル gitignore が無い環境でも除外されるよう明示する)
+.plans/
