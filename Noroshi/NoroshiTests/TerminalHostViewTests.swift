@@ -1,4 +1,5 @@
 import AppKit
+import SwiftTerm
 import XCTest
 
 @testable import Noroshi
@@ -70,6 +71,26 @@ final class TerminalHostViewTests: XCTestCase {
             Set(view.validAttributesForMarkedText()),
             Set([.underlineStyle, .markedClauseSegment, .glyphInfo])
         )
+    }
+
+    /// SwiftTerm が自動折返しした継続行は getText で改行を挟まない。wrapsToNextRow が実 wrap を検出する前提の確認。
+    func testAutoWrappedBoundaryHasNoNewlineInGetText() {
+        let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let terminal = view.getTerminal()
+        terminal.feed(text: String(repeating: "x", count: terminal.cols) + "yy")
+        XCTAssertFalse(terminal.getText(
+            start: Position(col: 0, row: terminal.buffer.yDisp),
+            end: Position(col: terminal.cols, row: terminal.buffer.yDisp + 1)).contains("\n"))
+    }
+
+    /// ハード改行 (\r\n) 境界は getText で "\n" を挟む。桁数不一致でクリップ描画された非折返し行が結合されない根拠。
+    func testHardNewlineBoundaryHasNewlineInGetText() {
+        let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        let terminal = view.getTerminal()
+        terminal.feed(text: "aaa\r\nbbb")
+        XCTAssertTrue(terminal.getText(
+            start: Position(col: 0, row: terminal.buffer.yDisp),
+            end: Position(col: terminal.cols, row: terminal.buffer.yDisp + 1)).contains("\n"))
     }
 
     private var noRange: NSRange {
