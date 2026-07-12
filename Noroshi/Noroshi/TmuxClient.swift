@@ -155,4 +155,12 @@ struct TmuxClient {
         try run(["display-message", "-p", "-t", "=\(session):", "#{window_id}"])
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
+
+    /// session のアクティブ pane のカレントディレクトリを返す。クリックされた相対パスの解決基準に使う。
+    /// target は activeWindowID と同じ colon 付き `=session:` 形式にする。colon 無し `=session` は
+    /// tmux 3.2a で pane 変数 `#{pane_current_path}` に空文字を返し、相対パス解決が全滅するため。
+    func paneCurrentPath(session: String) throws -> String {
+        try run(["display-message", "-p", "-t", "=\(session):", "#{pane_current_path}"])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
