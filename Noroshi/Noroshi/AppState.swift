@@ -44,6 +44,8 @@ final class AppState: ObservableObject {
     @Published var lastError: String?
     /// コマンドパレット (cmd+P) の表示状態。true の間だけ terminal の上にオーバーレイを重ねる。
     @Published var isPalettePresented = false
+    /// サイドバー列の表示状態。cmd+B のトグルと NavigationSplitView の双方向同期に使う。
+    @Published var sidebarVisibility: NavigationSplitViewVisibility = .all
     /// サイドバー下部のフィルタ入力。session 名・window 名・index を部分一致で絞り込む。
     @Published var sidebarQuery: String = ""
     /// 通知フィルタ。true のとき未読 (badge > 0) の window だけをサイドバーに表示する。
@@ -162,6 +164,11 @@ final class AppState: ObservableObject {
     func requestFocus(_ target: AppFocusTarget) {
         focusRequestSequence += 1
         focusRequest = AppFocusRequest(sequence: focusRequestSequence, target: target)
+    }
+
+    /// サイドバーの表示/非表示を切り替える (cmd+B)。
+    func toggleSidebar() {
+        sidebarVisibility = sidebarVisibility == .detailOnly ? .all : .detailOnly
     }
 
     /// 追加済み session 名をメモリと UserDefaults へ同時に反映する。
