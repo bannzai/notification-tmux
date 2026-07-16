@@ -61,6 +61,16 @@ struct SidebarView: View {
                             appState.removeSessionFromSidebar(session.name)
                         }
                     }
+                    // Cmd 長押し中に cmd+数字 の対象を示すガイド。フィルタ中も番号は全体の表示順 (cmd+1..9 の実際の遷移先) で振る。
+                    .overlay(alignment: .trailing) {
+                        if appState.isShortcutGuidePresented,
+                           let guideNumber = appState.displaySessionNames.firstIndex(of: session.name)
+                               .flatMap(ShortcutGuide.guideNumber(forDisplayIndex:))
+                        {
+                            ShortcutGuideBadge(number: guideNumber)
+                                .padding(.trailing, 4)
+                        }
+                    }
                 }
             }
             // フィルタ中は表示 index と全体順 (displaySessionNames) がずれ保存順が壊れるため、並べ替えを無効化する。
