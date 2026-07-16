@@ -44,6 +44,10 @@ final class AppState: ObservableObject {
     @Published var lastError: String?
     /// コマンドパレット (cmd+P) の表示状態。true の間だけ terminal の上にオーバーレイを重ねる。
     @Published var isPalettePresented = false
+    /// サイドバー列の表示状態。cmd+B のトグルと NavigationSplitView の双方向同期に使う。
+    @Published var sidebarVisibility: NavigationSplitViewVisibility = .all
+    /// Cmd 長押しガイド (cmd+1..9 の対象表示) の表示状態。true の間サイドバーの session 行に番号バッジを重ねる。
+    @Published private(set) var isShortcutGuidePresented = false
     /// サイドバー下部のフィルタ入力。session 名・window 名・index を部分一致で絞り込む。
     @Published var sidebarQuery: String = ""
     /// 通知フィルタ。true のとき未読 (badge > 0) の window だけをサイドバーに表示する。
@@ -61,6 +65,12 @@ final class AppState: ObservableObject {
     private var requestedWindowID: String?
     /// 同じフォーカス先への連続操作を別イベントとして配送する連番。
     private var focusRequestSequence = 0
+    /// Cmd 長押しガイドの表示待ちタスク。holdDuration 前に cmd が離されたらキャンセルする。
+    private var shortcutGuideDelayTask: Task<Void, Never>?
+    /// flagsChanged のローカルモニタ。多重登録を防ぐため保持する。
+    private var modifierFlagsMonitor: Any?
+    // テストから現在の修飾キー状態を差し替えるために var にしている。実行時は実キー状態を参照する。
+    var currentModifierFlags: () -> NSEvent.ModifierFlags = { NSEvent.modifierFlags }
 
     // テストからダミー binaryPath の client を注入するために定義している
     init(client: TmuxClient = TmuxClient(), defaults: UserDefaults = .standard) {
@@ -162,6 +172,46 @@ final class AppState: ObservableObject {
     func requestFocus(_ target: AppFocusTarget) {
         focusRequestSequence += 1
         focusRequest = AppFocusRequest(sequence: focusRequestSequence, target: target)
+    }
+
+    /// サイドバーの表示/非表示を切り替える (cmd+B)。
+    func toggleSidebar() {
+        sidebarVisibility = sidebarVisibility == .detailOnly ? .all : .detailOnly
+    }
+
+    /// Cmd 長押しガイドのため修飾キーの変化の監視を開始する。多重登録しない (冪等)。
+    func startShortcutGuideMonitoring() {
+        guard modifierFlagsMonitor == nil else { return }
+        modifierFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
+            self?.handleModifierFlagsChanged(event.modifierFlags)
+            return event
+        }
+        // cmd を押したままアプリを離れる (cmd+tab 等) と離しイベントを受け取れないため、非アクティブ化で必ず閉じる。
+        NotificationCenter.default.addObserver(
+            forName: NSApplication.willResignActiveNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.handleModifierFlagsChanged([]) }
+        }
+    }
+
+    /// 修飾キーの変化からガイドの表示/非表示を決める。cmd 単独が holdDuration 続いたら表示し、崩れたら閉じる。
+    func handleModifierFlagsChanged(_ flags: NSEvent.ModifierFlags) {
+        if ShortcutGuide.isCommandOnly(flags) {
+            guard shortcutGuideDelayTask == nil, !isShortcutGuidePresented else { return }
+            shortcutGuideDelayTask = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(ShortcutGuide.holdDuration))
+                guard let self, !Task.isCancelled else { return }
+                self.shortcutGuideDelayTask = nil
+                // 待機中に flagsChanged を取りこぼしても (cmd+tab でのアプリ切替等) 誤表示しないよう、
+                // 表示直前にも実際のキー状態を確かめる。
+                guard ShortcutGuide.isCommandOnly(self.currentModifierFlags()) else { return }
+                self.isShortcutGuidePresented = true
+            }
+        } else {
+            shortcutGuideDelayTask?.cancel()
+            shortcutGuideDelayTask = nil
+            isShortcutGuidePresented = false
+        }
     }
 
     /// 追加済み session 名をメモリと UserDefaults へ同時に反映する。

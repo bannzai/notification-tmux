@@ -42,6 +42,7 @@ struct NoroshiApp: App {
                     }
                     .task {
                         appState.startPolling()
+                        appState.startShortcutGuideMonitoring()
                     }
                     .frame(minWidth: 900, minHeight: 560)
             }
@@ -120,6 +121,13 @@ struct NavigationCommands: Commands {
         }
 
         CommandMenu("表示") {
+            Button(appState.sidebarVisibility == .detailOnly ? "サイドバーを表示" : "サイドバーを非表示") {
+                appState.toggleSidebar()
+            }
+            .keyboardShortcut("b", modifiers: .command)
+
+            Divider()
+
             Button("テーマを再読み込み") { TerminalSessionManager.shared.reloadTheme() }
                 .keyboardShortcut("r", modifiers: [.command, .shift])
         }
