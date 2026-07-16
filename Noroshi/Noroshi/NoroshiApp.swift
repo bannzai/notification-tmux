@@ -42,6 +42,7 @@ struct NoroshiApp: App {
                     }
                     .task {
                         appState.startPolling()
+                        appState.startShortcutGuideMonitoring()
                     }
                     .frame(minWidth: 900, minHeight: 560)
             }
