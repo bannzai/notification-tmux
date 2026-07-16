@@ -69,6 +69,10 @@ struct SidebarView: View {
             })
         }
         .listStyle(.sidebar)
+        // List 標準のフォーカス移動は行 (Button) 間で機能しないため、↑↓ を自前で処理して
+        // フォーカスと選択を表示順の隣の行へ動かす (issue #30)。
+        .onKeyPress(.upArrow) { moveSidebarSelection(-1) }
+        .onKeyPress(.downArrow) { moveSidebarSelection(1) }
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 0) {
                 if let error = appState.lastError {
@@ -85,6 +89,22 @@ struct SidebarView: View {
             guard request?.target == .sidebar else { return }
             focusedItem = appState.selectedSessionName.map(FocusedItem.session)
                 ?? appState.displaySessionNames.first.map(FocusedItem.session)
+        }
+        // ↑↓ (moveSidebarSelection) や Tab で移ったフォーカスを選択へ反映し、
+        // ハイライトと terminal 表示をフォーカス行へ追従させる (issue #30)。
+        .onChange(of: focusedItem) { _, item in
+            appState.isSidebarFocused = item != nil
+            switch item {
+            case .session(let sessionName):
+                guard sessionName != appState.selectedSessionName else { return }
+                appState.selectSession(named: sessionName)
+            case .window(let windowID):
+                guard windowID != appState.selectedWindowID,
+                      let window = appState.window(id: windowID) else { return }
+                appState.open(window: window)
+            case .filter, nil:
+                break
+            }
         }
     }
 
@@ -136,6 +156,38 @@ struct SidebarView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(.bar)
+    }
+
+    /// ↑↓ でフォーカスを表示順の隣の行へ移す。選択への反映は focusedItem の onChange が行う。
+    /// フィルタ入力中は入力操作を妨げないよう処理しない。
+    private func moveSidebarSelection(_ offset: Int) -> KeyPress.Result {
+        guard focusedItem != .filter else { return .ignored }
+        switch NoroshiNavigation.adjacentSidebarRow(
+            in: appState.filteredDisplaySessions,
+            collapsedSessionNames: isFiltering ? [] : appState.collapsedSessionNames,
+            from: currentSidebarRow,
+            offset: offset)
+        {
+        case .session(let sessionName): focusedItem = .session(sessionName)
+        case .window(let window): focusedItem = .window(window.id)
+        case nil: return .ignored
+        }
+        return .handled
+    }
+
+    /// ↑↓ の起点となる行。フォーカス行を優先し、行以外にフォーカスがある場合は選択状態から解決する。
+    private var currentSidebarRow: NoroshiNavigation.SidebarRow? {
+        switch focusedItem {
+        case .session(let sessionName):
+            return .session(name: sessionName)
+        case .window(let windowID):
+            return appState.window(id: windowID).map(NoroshiNavigation.SidebarRow.window)
+        case .filter, nil:
+            if let window = appState.selectedWindowID.flatMap(appState.window(id:)) {
+                return .window(window)
+            }
+            return appState.selectedSessionName.map { .session(name: $0) }
+        }
     }
 
     /// session の展開状態への Binding。フィルタ中は一致 window を隠さないよう常に展開扱いにする。

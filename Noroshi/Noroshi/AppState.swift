@@ -44,6 +44,9 @@ final class AppState: ObservableObject {
     @Published var lastError: String?
     /// コマンドパレット (cmd+P) の表示状態。true の間だけ terminal の上にオーバーレイを重ねる。
     @Published var isPalettePresented = false
+    /// サイドバーがキーボードフォーカスを持っているか。true の間は terminal がフォーカスを奪わず、
+    /// ↑↓ でのサイドバーナビゲーションを session 切替をまたいで継続できるようにする (issue #30)。
+    @Published var isSidebarFocused = false
     /// サイドバー下部のフィルタ入力。session 名・window 名・index を部分一致で絞り込む。
     @Published var sidebarQuery: String = ""
     /// 通知フィルタ。true のとき未読 (badge > 0) の window だけをサイドバーに表示する。
