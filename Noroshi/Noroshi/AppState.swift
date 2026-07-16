@@ -44,6 +44,9 @@ final class AppState: ObservableObject {
     @Published var lastError: String?
     /// コマンドパレット (cmd+P) の表示状態。true の間だけ terminal の上にオーバーレイを重ねる。
     @Published var isPalettePresented = false
+    /// サイドバーがキーボードフォーカスを持っているか。true の間は terminal がフォーカスを奪わず、
+    /// ↑↓ でのサイドバーナビゲーションを session 切替をまたいで継続できるようにする (issue #30)。
+    @Published var isSidebarFocused = false
     /// サイドバー列の表示状態。cmd+B のトグルと NavigationSplitView の双方向同期に使う。
     @Published var sidebarVisibility: NavigationSplitViewVisibility = .all
     /// Cmd 長押しガイド (cmd+1..9 の対象表示) の表示状態。true の間サイドバーの session 行に番号バッジを重ねる。

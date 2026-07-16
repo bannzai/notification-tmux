@@ -10,7 +10,7 @@ struct ContentView: View {
                 .navigationSplitViewColumnWidth(min: 200, ideal: 260)
         } detail: {
             if let sessionName = appState.selectedSessionName {
-                TerminalHostView(sessionName: sessionName)
+                TerminalHostView(sessionName: sessionName, takesFocus: !appState.isSidebarFocused)
             } else if !appState.sessions.isEmpty {
                 ContentUnavailableView(
                     "session を追加してください",

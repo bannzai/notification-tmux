@@ -156,6 +156,30 @@ struct NotificationRecord: Equatable {
 
 /// session/window の移動先を計算する純粋ロジック。実 tmux に依存しないためユニットテスト可能。
 enum NoroshiNavigation {
+    /// サイドバーのキーボードナビゲーション (↑↓) が辿る行。表示順の session 行と展開中の window 行。
+    enum SidebarRow: Equatable {
+        /// session 行。
+        case session(name: String)
+        /// window 行。
+        case window(TmuxWindow)
+    }
+
+    /// サイドバーの表示行 (session 行 + 折りたたまれていない session の window 行) を上から順に平坦化し、
+    /// current から offset 隣の行を返す (端では停止)。current が nil または表示行に無い場合は先頭行を返す。
+    static func adjacentSidebarRow(
+        in sessions: [TmuxSession],
+        collapsedSessionNames: Set<String>,
+        from current: SidebarRow?,
+        offset: Int
+    ) -> SidebarRow? {
+        let rows = sessions.flatMap { session -> [SidebarRow] in
+            [.session(name: session.name)]
+                + (collapsedSessionNames.contains(session.name) ? [] : session.windows.map(SidebarRow.window))
+        }
+        guard let current, let currentIndex = rows.firstIndex(of: current) else { return rows.first }
+        return rows[max(0, min(rows.count - 1, currentIndex + offset))]
+    }
+
     /// tmux clientの実接続先をアプリ選択へ反映すべきか判定する。
     /// managerとapp選択がずれている間はView更新待ちなので、古いattach先へ戻さない。
     static func shouldFollowAttachedSession(

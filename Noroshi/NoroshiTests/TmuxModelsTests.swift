@@ -209,6 +209,48 @@ final class TmuxModelsTests: XCTestCase {
             selected: "B", managed: "B", attached: "B", availableNames: available))
     }
 
+    func testAdjacentSidebarRowTraversesSessionsAndExpandedWindows() {
+        let windowA1 = TmuxWindow(id: "@1", sessionName: "A", index: 0, name: "a1", isActive: true, paneCount: 1)
+        let windowA2 = TmuxWindow(id: "@2", sessionName: "A", index: 1, name: "a2", isActive: false, paneCount: 1)
+        let windowB1 = TmuxWindow(id: "@3", sessionName: "B", index: 0, name: "b1", isActive: true, paneCount: 1)
+        let sessions = [
+            TmuxSession(id: "A", attachedClients: 0, windows: [windowA1, windowA2]),
+            TmuxSession(id: "B", attachedClients: 0, windows: [windowB1]),
+        ]
+
+        // session 行 -> 配下の window 行 -> 次の session 行の順で下る
+        XCTAssertEqual(
+            NoroshiNavigation.adjacentSidebarRow(in: sessions, collapsedSessionNames: [], from: .session(name: "A"), offset: 1),
+            .window(windowA1))
+        XCTAssertEqual(
+            NoroshiNavigation.adjacentSidebarRow(in: sessions, collapsedSessionNames: [], from: .window(windowA2), offset: 1),
+            .session(name: "B"))
+        // 逆順も同じ経路を上る
+        XCTAssertEqual(
+            NoroshiNavigation.adjacentSidebarRow(in: sessions, collapsedSessionNames: [], from: .session(name: "B"), offset: -1),
+            .window(windowA2))
+        // 端では停止する (循環しない)
+        XCTAssertEqual(
+            NoroshiNavigation.adjacentSidebarRow(in: sessions, collapsedSessionNames: [], from: .session(name: "A"), offset: -1),
+            .session(name: "A"))
+        XCTAssertEqual(
+            NoroshiNavigation.adjacentSidebarRow(in: sessions, collapsedSessionNames: [], from: .window(windowB1), offset: 1),
+            .window(windowB1))
+        // 折りたたみ中 session の window は辿らない
+        XCTAssertEqual(
+            NoroshiNavigation.adjacentSidebarRow(in: sessions, collapsedSessionNames: ["A"], from: .session(name: "A"), offset: 1),
+            .session(name: "B"))
+        // 起点が nil / 表示行に無い場合は先頭行へ
+        XCTAssertEqual(
+            NoroshiNavigation.adjacentSidebarRow(in: sessions, collapsedSessionNames: [], from: nil, offset: 1),
+            .session(name: "A"))
+        XCTAssertEqual(
+            NoroshiNavigation.adjacentSidebarRow(in: sessions, collapsedSessionNames: ["A"], from: .window(windowA1), offset: 1),
+            .session(name: "A"))
+        // 表示行が無ければ nil
+        XCTAssertNil(NoroshiNavigation.adjacentSidebarRow(in: [], collapsedSessionNames: [], from: nil, offset: 1))
+    }
+
     func testSessionNameAtDisplayIndex() {
         let names = ["A", "B", "C"]
         XCTAssertEqual(NoroshiNavigation.sessionName(in: names, atDisplayIndex: 0), "A")

@@ -528,6 +528,9 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
 struct TerminalHostView: NSViewRepresentable {
     /// 表示する tmux session 名。
     let sessionName: String
+    /// 新規取り付け・session 切替時に terminal へフォーカスを移してよいか。
+    /// サイドバーがキーボード操作中 (フォーカス保持中) は false にし、↑↓ ナビゲーションからフォーカスを奪わない (issue #30)。
+    let takesFocus: Bool
 
     func makeNSView(context: Context) -> NSView {
         let container = NSView()
@@ -551,7 +554,7 @@ struct TerminalHostView: NSViewRepresentable {
         let terminal = manager.terminalView(for: sessionName)
         // ポーリング由来の再描画ではフォーカスを奪わず、同じviewをswitch-clientした場合だけterminalへ戻す。
         guard terminal.superview !== container else {
-            if didChangeSession { manager.focusTerminal() }
+            if didChangeSession, takesFocus { manager.focusTerminal() }
             return
         }
         container.subviews.forEach { $0.removeFromSuperview() }
@@ -563,6 +566,6 @@ struct TerminalHostView: NSViewRepresentable {
             terminal.topAnchor.constraint(equalTo: container.topAnchor),
             terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        manager.focusTerminal()
+        if takesFocus { manager.focusTerminal() }
     }
 }
