@@ -37,6 +37,18 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertNil(TmuxFormat.parseSessionLine("no-separator"))
     }
 
+    func testParseWindowGridLine() {
+        XCTAssertEqual(TmuxFormat.parseWindowGridLine("209\u{1f}60"), TmuxWindowGrid(cols: 209, rows: 60))
+    }
+
+    func testParseWindowGridLineInvalid() {
+        XCTAssertNil(TmuxFormat.parseWindowGridLine(""))
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("209"))
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("x\u{1f}y"))
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("0\u{1f}60"))
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("209\u{1f}0"))
+    }
+
     func testParseSessionIDLinePreservesPaneTargetCharactersInName() {
         let parsed = TmuxFormat.parseSessionIDLine("$12\u{1f}my.app:build%1")
         XCTAssertEqual(parsed?.id, "$12")
