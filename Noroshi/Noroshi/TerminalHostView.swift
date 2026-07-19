@@ -239,6 +239,14 @@ final class MouseReportingTerminalView: LocalProcessTerminalView {
             x: hit.col, y: hit.row, pixelX: 0, pixelY: 0)
     }
 
+    /// フルスクリーン切替やウィンドウリサイズで表示領域が変わったら、window 格子が収まるフォントへ再フィットする (issue #36)。
+    /// setFrameSize は AppKit/SwiftUI のレイアウトパス中に呼ばれ、その最中の font 変更 (再 resize) は
+    /// View 更新と競合してクラッシュし得るため、次の runloop へ合流させて実行する。
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        TerminalSessionManager.shared.scheduleRefitFont()
+    }
+
     /// 表示中フォントの 1 セル寸法 (pt)。getOptimalFrameSize() は width=cell*cols+scroller幅 / height=cell*rows を返すため逆算する。
     /// リンククリック検出のため TerminalSessionManager (同一ファイル) から参照するので fileprivate。
     fileprivate func cellSize() -> CGSize {
@@ -274,6 +282,13 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     private let tmuxClient = TmuxClient()
     /// Ghostty config 由来の配色。起動時に一度読み、メニュー「テーマを再読み込み」で更新する。config が無ければ nil。
     private var theme = GhosttyTheme.load()
+    /// attach 中 session のカレント window の格子サイズ。フォントのフィット計算 (issue #36) に使う。不明 (取得失敗) なら縮小しない。
+    private var windowGrid: TmuxWindowGrid?
+    /// フォント未指定時の基準となる SwiftTerm 既定フォント。フィット縮小後の view.font を基準に
+    /// 再解決すると縮小が累積するため、view 生成直後の未加工の値を保持する。
+    private var baseFont: NSFont?
+    /// scheduleRefitFont の合流フラグ。true の間は再フィットが予約済みで、追加の予約は行わない。
+    private var pendingRefit = false
     /// ホイール / ドラッグを横取りして tmux へマウスレポートを送るための local event monitor。生成後は最大 1 本。
     private var mouseMonitor: Any?
     /// 左ボタン押下時のセル座標。押下と同一セルで離した場合だけクリックとみなしリンクを開くための記録。
@@ -289,6 +304,7 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
             do {
                 try tmuxClient.switchClient(pid: view.process.shellPid, to: sessionName)
                 currentSessionName = sessionName
+                fetchWindowGrid(for: sessionName)
                 return view
             } catch {
                 view.terminate()
@@ -343,6 +359,9 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     private func makeTerminalView(for sessionName: String) -> MouseReportingTerminalView {
         installMouseMonitorIfNeeded()
         let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        baseFont = view.font
+        // 前の session の格子を引き継がず、取得完了までフィット無し (設定サイズのまま) で表示する。
+        windowGrid = nil
         view.processDelegate = self
         // SwiftTerm 自身の暗黙 URL 検出による自動オープンを止める。リンクオープンは Noroshi が独自のクリック検出で行うため二重化させない。
         // .alwaysWithModifier では linkForClick が暗黙リンク (match.isExplicit == false) を常に nil 扱いにするので、
@@ -357,7 +376,8 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
                 : ["attach-session", "-f", "ignore-size", "-t", "=\(sessionName)"]
         )
         theme?.apply(to: view)
-        applyFont(theme, to: view)
+        applyFont(to: view)
+        fetchWindowGrid(for: sessionName)
         return view
     }
 
@@ -367,26 +387,89 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         theme = GhosttyTheme.load()
         if let view = currentView {
             theme?.apply(to: view)
-            applyFont(theme, to: view)
+            applyFont(to: view)
         }
     }
 
-    /// 解決済み設定の font-family / font-style / font-size を TerminalView.font に反映する。
-    /// すべて nil (未指定) のときは SwiftTerm の既定フォントを尊重して何もしない。
-    /// family が実在しなければ等幅システムフォントへフォールバックする。
+    /// ポーリング等が取得した attach 中 window の格子サイズを反映し、変わっていれば表示フォントを再フィットする。
+    /// 同じ値の再通知では何もしない (冪等)。
+    func updateWindowGrid(_ grid: TmuxWindowGrid?) {
+        guard grid != windowGrid else { return }
+        windowGrid = grid
+        refitFont()
+    }
+
+    /// 表示領域の変化 (フルスクリーン切替・ウィンドウリサイズ) に合わせて表示フォントを再フィットする。
+    /// 同じ状態からの再計算は同じフォントへ収束する (冪等)。
+    func refitFont() {
+        if let view = currentView {
+            applyFont(to: view)
+        }
+    }
+
+    /// レイアウトパス中 (setFrameSize) からの再フィット要求を次の runloop へ 1 回に合流させて実行する。
+    /// レイアウト中に font を変更すると SwiftUI の View 更新と競合するため、同期では行わない。
+    func scheduleRefitFont() {
+        guard !pendingRefit else { return }
+        pendingRefit = true
+        DispatchQueue.main.async {
+            self.pendingRefit = false
+            self.refitFont()
+        }
+    }
+
+    /// attach 中 session のカレント window の格子サイズを tmux から取り直し、届いたら再フィットする。
+    /// tmux CLI (Process.waitUntilExit) は runloop を回すため、View 更新中に同期実行せず必ず非同期で行う。
+    /// 取得中に別 session へ切り替わっていた場合は古い格子を適用しない。
+    private func fetchWindowGrid(for sessionName: String) {
+        let tmuxClient = self.tmuxClient
+        Task { @MainActor in
+            let grid = await Task.detached(priority: .userInitiated) {
+                try? tmuxClient.windowGrid(session: sessionName)
+            }.value
+            guard self.currentSessionName == sessionName else { return }
+            self.updateWindowGrid(grid)
+        }
+    }
+
+    /// 解決済み設定の font-family / font-style / font-size を、attach 中 window の格子が view に収まる
+    /// サイズへ必要な分だけ縮小して TerminalView.font に反映する (issue #36)。設定が無い場合も
+    /// SwiftTerm 既定フォントを基準に同じフィットを行う。family が実在しなければ等幅システムフォントへ
+    /// フォールバックする。
     /// font setter は selection 解除・レイアウト再計算の副作用があるため、値が変わる時だけ代入する (docs/knowledge.md)。
-    private func applyFont(_ theme: GhosttyTheme?, to view: TerminalView) {
-        guard let theme, theme.fontFamily != nil || theme.fontStyle != nil || theme.fontSize != nil else { return }
-        let base = view.font
-        let size = theme.fontSize.map { CGFloat($0) } ?? base.pointSize
-        let font = TerminalFontResolver.resolve(
-            family: theme.fontFamily,
-            style: theme.fontStyle,
-            size: size,
-            base: base)
+    private func applyFont(to view: MouseReportingTerminalView) {
+        guard let baseFont else { return }
+        let preferred: NSFont
+        if let theme, theme.fontFamily != nil || theme.fontStyle != nil || theme.fontSize != nil {
+            preferred = TerminalFontResolver.resolve(
+                family: theme.fontFamily,
+                style: theme.fontStyle,
+                size: theme.fontSize.map { CGFloat($0) } ?? baseFont.pointSize,
+                base: baseFont)
+        } else {
+            preferred = baseFont
+        }
+        let font = fittedFont(preferred: preferred, in: view)
         if view.font.fontName != font.fontName || view.font.pointSize != font.pointSize {
             view.font = font
         }
+    }
+
+    /// window 格子が判明している場合、view の表示領域に格子全体が収まるサイズへ縮小したフォントを返す。
+    /// 格子が不明、または既に収まる場合は preferred をそのまま返す。
+    private func fittedFont(preferred: NSFont, in view: MouseReportingTerminalView) -> NSFont {
+        guard let windowGrid else { return preferred }
+        // SwiftTerm の backingScaleFactor() と同じフォールバックでピクセル密度を解決する (セル寸法のスナップ一致のため)。
+        let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+        let size = TerminalFontFit.fittedSize(
+            preferred: preferred.pointSize,
+            grid: windowGrid,
+            viewSize: view.frame.size,
+            // SwiftTerm の processSizeChange は scroller 幅を引いた実効幅で列数を計算するため同じ幅を引く。
+            scrollerWidth: NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy),
+            cellSize: { TerminalFontFit.cellSize(of: NSFont(descriptor: preferred.fontDescriptor, size: $0) ?? preferred, scale: scale) })
+        guard size != preferred.pointSize else { return preferred }
+        return NSFont(descriptor: preferred.fontDescriptor, size: size) ?? preferred
     }
 
     /// ホイール / 左ドラッグを横取りする local event monitor を 1 度だけ張る。生成済みなら何もしない (冪等)。

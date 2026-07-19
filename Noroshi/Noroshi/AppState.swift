@@ -240,11 +240,15 @@ final class AppState: ObservableObject {
         let attachedClientPID = TerminalSessionManager.shared.attachedClientPID
         let managedSessionName = TerminalSessionManager.shared.managedSessionName
         do {
-            let (fetched, attachedSessionName) = try await Task.detached(priority: .utility) {
+            let (fetched, attachedSessionName, windowGrid) = try await Task.detached(priority: .utility) {
                 let sessions = try client.fetchSessions()
                 let attachedSession = try attachedClientPID.flatMap { try client.attachedClient(pid: $0)?.sessionName }
-                return (sessions, attachedSession)
+                // 表示中 window の格子サイズ (フォントのフィット計算用; issue #36)。
+                // 取得失敗は「フィットしない」へ倒すだけなので一覧の更新は継続する。
+                let grid = (attachedSession ?? managedSessionName).flatMap { try? client.windowGrid(session: $0) }
+                return (sessions, attachedSession, grid)
             }.value
+            TerminalSessionManager.shared.updateWindowGrid(windowGrid)
             // 変化が無い時は再代入せず、2 秒ポーリング由来の不要な再描画 (terminal のフォーカス奪取等) を避ける。
             if fetched != sessions { sessions = fetched }
             lastError = nil
