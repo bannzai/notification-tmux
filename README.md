@@ -127,6 +127,20 @@ xcodebuild -project Noroshi.xcodeproj -scheme Noroshi -configuration Debug -deri
 open ../tmp/DerivedData/Build/Products/Debug/Noroshi.app
 ```
 
+## 普段使いする (インストール)
+
+Release ビルドを `/Applications/Noroshi.app` に配置する。
+
+```bash
+make install
+```
+
+- 開発ツリーの `make clean` やブランチ切替の影響を受けず、Spotlight・Dock・ログイン項目から起動できる
+- 更新も `make install` の再実行で行う (既存の app を置き換える)
+- アンインストールは `rm -rf /Applications/Noroshi.app`
+- 配置済み app が起動中は `make run` しても開発ビルドは起動しない (同じ bundle identifier のため)。開発ビルドの確認時は普段使いの Noroshi を終了してから実行する
+- 配置方法の検討経緯は [ADR 0007](documents/adr/0007-install-release-build-to-applications.md) を参照
+
 ## テスト
 
 ```bash

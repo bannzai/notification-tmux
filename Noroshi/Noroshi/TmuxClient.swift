@@ -46,12 +46,26 @@ struct TmuxClient {
             .first { FileManager.default.isExecutableFile(atPath: $0) } ?? "/usr/bin/env"
     }
 
+    /// tmux 子プロセスに渡す環境変数 (ADR 0008)。
+    /// Finder/Spotlight 起動 (launchd 環境) には locale 変数が無く、tmux が非 UTF-8 クライアント扱いに
+    /// なって出力中の制御文字 (`TmuxFormat.fieldSeparator` 0x1F) を `_` へサニタイズするため、
+    /// exit 0 のまま一覧のパースが全滅する (issue #34)。locale 未設定の時だけ UTF-8 を明示する。
+    static func childEnvironment(base: [String: String] = ProcessInfo.processInfo.environment) -> [String: String] {
+        // 文字種 locale は LC_ALL > LC_CTYPE > LANG の優先で決まる (POSIX) ため、いずれかがあれば
+        // ユーザー設定を尊重する。値は PTY 側の既定 (SwiftTerm getEnvironmentVariables) と同じ en_US.UTF-8。
+        guard base["LC_ALL"] == nil, base["LC_CTYPE"] == nil, base["LANG"] == nil else { return base }
+        var environment = base
+        environment["LC_CTYPE"] = "en_US.UTF-8"
+        return environment
+    }
+
     /// tmux をサブプロセスとして同期実行し stdout を返す。非 0 終了は TmuxClientError。
     @discardableResult
     func run(_ arguments: [String]) throws -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: binaryPath)
         process.arguments = binaryPath.hasSuffix("env") ? ["tmux"] + arguments : arguments
+        process.environment = TmuxClient.childEnvironment()
         let stdout = Pipe()
         let stderr = Pipe()
         process.standardOutput = stdout
