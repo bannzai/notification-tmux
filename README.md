@@ -47,6 +47,7 @@ Noroshi.app ◀─────────────────────�
 
 - **window の識別子は tmux の window_id (`@n`) を SSOT にする**。サーバ全体でユニークで、session/window の改名・並べ替えの影響を受けない
 - **単一 attach 方式**（issue #6 / #20）: terminal clientは常時最大1本。session切替は同じclientへの`switch-client`で行い、非表示viewを増やさずtmuxの直前session履歴も保持する。詳細は [ADR 0005](documents/adr/0005-switch-client-for-session-navigation.md) を参照
+- **表示フォントの自動フィット**（issue #36）: attach は `-f ignore-size`（他 client の window を resize しないため）なので、window が Noroshi の terminal 格子より大きいと tmux のカーソル追従パンで端が見切れる。attach 中 window の格子 (cols × rows) を取得し、設定フォントサイズを上限に必要な分だけ縮小して window 全体を表示する。詳細は [ADR 0009](documents/adr/0009-font-auto-fit-for-ignore-size-attach.md) を参照
 - **独自 config + Ghostty テーマ対応**: アプリ独自の設定ファイル `~/.config/noroshi/config`（`XDG_CONFIG_HOME` を尊重、無ければ `~/.config/ghostty/config` にフォールバック）と、そこから参照される theme ファイルを読み、Ghostty と同じ意味論（theme が先に読まれ config の直接指定が上書きする）でマージした配色を SwiftTerm に適用する。ファイル形式は Ghostty config 互換で、`font-family` / `font-style` / `font-size` も反映する。config 編集後は再起動せず、メニュー「表示 > テーマを再読み込み」(cmd+shift+r) で反映できる。詳細は [ADR 0004](documents/adr/0004-noroshi-config-file.md) を参照
 - App Sandbox は無効 (homebrew の tmux を PTY で exec するため。SwiftTerm 公式の推奨)
 - 詳細な知見・ハマりどころは [docs/knowledge.md](docs/knowledge.md) を参照（v1 開発時の記録）

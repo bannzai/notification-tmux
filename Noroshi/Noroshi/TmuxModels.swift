@@ -16,6 +16,14 @@ struct TmuxWindow: Identifiable, Equatable, Hashable {
     let paneCount: Int
 }
 
+/// tmux window の格子サイズ (列 × 行)。表示フォントのフィット計算 (issue #36) の入力。
+struct TmuxWindowGrid: Equatable {
+    /// window の列数 (#{window_width})。
+    let cols: Int
+    /// window の行数 (#{window_height})。
+    let rows: Int
+}
+
 /// tmux の 1 session。cmux でいう workspace に対応する。
 struct TmuxSession: Identifiable, Equatable, Hashable {
     /// session 名。tmux 上で一意なのでそのまま識別子にする。
@@ -42,6 +50,8 @@ enum TmuxFormat {
     static let sessionIDFormat = "#{session_id}\u{1f}#{session_name}"
     /// `list-clients -F` 用。SwiftTerm の子 PID から Noroshi 自身の tmux client を特定する。
     static let clientFormat = "#{client_pid}\u{1f}#{client_tty}\u{1f}#{session_name}"
+    /// `display-message -p` 用。attach 中 session のカレント window の格子サイズを取得する。
+    static let windowGridFormat = "#{window_width}\u{1f}#{window_height}"
 
     /// `windowFormat` で出力された 1 行を TmuxWindow にする。形式が合わない行は nil。
     static func parseWindowLine(_ line: String) -> TmuxWindow? {
@@ -66,6 +76,17 @@ enum TmuxFormat {
         let parts = line.split(separator: fieldSeparator, omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 2, parts[0].hasPrefix("$"), !parts[1].isEmpty else { return nil }
         return (parts[0], parts[1])
+    }
+
+    /// `windowGridFormat` で出力された 1 行を TmuxWindowGrid にする。形式が合わない行は nil。
+    static func parseWindowGridLine(_ line: String) -> TmuxWindowGrid? {
+        let parts = line.split(separator: fieldSeparator, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 2,
+              let cols = Int(parts[0]),
+              let rows = Int(parts[1]),
+              cols > 0, rows > 0
+        else { return nil }
+        return TmuxWindowGrid(cols: cols, rows: rows)
     }
 
     /// `clientFormat` で出力された 1 行を tmux client 情報にする。形式が合わない行は nil。

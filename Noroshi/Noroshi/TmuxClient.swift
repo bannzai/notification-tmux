@@ -170,6 +170,14 @@ struct TmuxClient {
             .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// session のカレント window の格子サイズ (列 × 行) を返す。表示フォントのフィット計算 (issue #36) に使う。
+    /// target は activeWindowID と同じ colon 付き `=session:` 形式で session のカレント window を指す。
+    func windowGrid(session: String) throws -> TmuxWindowGrid? {
+        TmuxFormat.parseWindowGridLine(
+            try run(["display-message", "-p", "-t", "=\(session):", TmuxFormat.windowGridFormat])
+                .trimmingCharacters(in: .whitespacesAndNewlines))
+    }
+
     /// session のアクティブ pane のカレントディレクトリを返す。クリックされた相対パスの解決基準に使う。
     /// target は activeWindowID と同じ colon 付き `=session:` 形式にする。colon 無し `=session` は
     /// tmux 3.2a で pane 変数 `#{pane_current_path}` に空文字を返し、相対パス解決が全滅するため。
