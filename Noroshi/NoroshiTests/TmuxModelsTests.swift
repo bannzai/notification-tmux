@@ -12,6 +12,42 @@ final class TmuxModelsTests: XCTestCase {
         AppState(client: TmuxClient(binaryPath: "/usr/bin/false"), defaults: defaults, remoteHosts: { [] })
     }
 
+    /// 実 tmux の代わりに固定の一覧を返す偽 tmux スクリプトを作る (refresh の選択挙動をユーザーの実 session に触れず検証するため)。
+    /// sessionsFile へ 1 行 1 session 名を書くと list-sessions / list-windows がそれを返し、
+    /// 空にすると no-server エラーを返して server 停止を再現する。
+    private func makeFakeTmuxScript() throws -> (binaryPath: String, sessionsFile: URL) {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("noroshi-fake-tmux-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let sessionsFile = directory.appendingPathComponent("sessions.txt")
+        let scriptURL = directory.appendingPathComponent("tmux")
+        // \037 は TmuxFormat.fieldSeparator (0x1F) の octal エスケープ。
+        try """
+        #!/bin/sh
+        SESSIONS_FILE="\(sessionsFile.path)"
+        if [ ! -s "$SESSIONS_FILE" ]; then
+          echo "no server running on /tmp/noroshi-fake" >&2
+          exit 1
+        fi
+        case "$1" in
+        list-windows)
+          i=1
+          while IFS= read -r name; do
+            printf '%s\\037@%s\\0370\\037main\\0371\\0371\\n' "$name" "$i"
+            i=$((i+1))
+          done < "$SESSIONS_FILE"
+          ;;
+        list-sessions)
+          while IFS= read -r name; do
+            printf '%s\\0370\\n' "$name"
+          done < "$SESSIONS_FILE"
+          ;;
+        esac
+        """.write(to: scriptURL, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
+        return (scriptURL.path, sessionsFile)
+    }
+
     // MARK: - TmuxHost / TmuxID
 
     func testTmuxHostIDRoundTrip() {
@@ -253,6 +289,70 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertNil(state.badges["local:@19"])
         // 非表示は UserDefaults に永続化され、別インスタンスでも維持される
         XCTAssertEqual(makeState(defaults: defaults).hiddenSessionIDs, ["local:Hidden"])
+    }
+
+    // MARK: - 自動 attach しない (issue #48)
+
+    @MainActor
+    func testRefreshDoesNotAutoSelectSessionOnLaunch() async throws {
+        let suiteName = "TmuxModelsTests.testRefreshDoesNotAutoSelectSessionOnLaunch.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(["local:Focus"], forKey: "noroshi.sidebarSessionNames")
+        let fakeTmux = try makeFakeTmuxScript()
+        try "Focus\n".write(to: fakeTmux.sessionsFile, atomically: true, encoding: .utf8)
+        let state = AppState(client: TmuxClient(binaryPath: fakeTmux.binaryPath), defaults: defaults, remoteHosts: { [] })
+
+        await state.refresh()
+
+        // session が現存しサイドバーに表示されていても、ユーザーが選ぶまで自動選択 (自動 attach の起点) しない
+        XCTAssertEqual(state.displaySessionIDs, ["local:Focus"])
+        XCTAssertNil(state.selectedSessionID)
+    }
+
+    @MainActor
+    func testRefreshClearsSelectionWhenSelectedSessionDisappears() async throws {
+        let suiteName = "TmuxModelsTests.testRefreshClearsSelectionWhenSelectedSessionDisappears.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(["local:A", "local:B"], forKey: "noroshi.sidebarSessionNames")
+        let fakeTmux = try makeFakeTmuxScript()
+        try "A\nB\n".write(to: fakeTmux.sessionsFile, atomically: true, encoding: .utf8)
+        let state = AppState(client: TmuxClient(binaryPath: fakeTmux.binaryPath), defaults: defaults, remoteHosts: { [] })
+        await state.refresh()
+        state.selectSession(id: "local:A")
+        XCTAssertEqual(state.selectedSessionID, "local:A")
+
+        try "B\n".write(to: fakeTmux.sessionsFile, atomically: true, encoding: .utf8)
+        await state.refresh()
+
+        // 選択中 session の消滅 (kill 等) では選択を解除し、残った session へ自動フォールバック (自動 attach) しない
+        XCTAssertEqual(state.displaySessionIDs, ["local:B"])
+        XCTAssertNil(state.selectedSessionID)
+
+        // 同名 session が復活 (ssh ごしの tmux 起動等) しても、未選択のままで自動 attach しない
+        try "A\nB\n".write(to: fakeTmux.sessionsFile, atomically: true, encoding: .utf8)
+        await state.refresh()
+        XCTAssertNil(state.selectedSessionID)
+    }
+
+    @MainActor
+    func testRemoveSelectedSessionFromSidebarClearsSelection() async throws {
+        let suiteName = "TmuxModelsTests.testRemoveSelectedSessionFromSidebarClearsSelection.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        defaults.set(["local:A", "local:B"], forKey: "noroshi.sidebarSessionNames")
+        let fakeTmux = try makeFakeTmuxScript()
+        try "A\nB\n".write(to: fakeTmux.sessionsFile, atomically: true, encoding: .utf8)
+        let state = AppState(client: TmuxClient(binaryPath: fakeTmux.binaryPath), defaults: defaults, remoteHosts: { [] })
+        await state.refresh()
+        state.selectSession(id: "local:A")
+
+        state.removeSessionFromSidebar("local:A")
+
+        // 表示中 session をサイドバーから外した時も、残った session へ自動で移って attach しない
+        XCTAssertEqual(state.sidebarSessionIDs, ["local:B"])
+        XCTAssertNil(state.selectedSessionID)
     }
 
     @MainActor

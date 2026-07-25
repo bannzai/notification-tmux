@@ -18,7 +18,7 @@ tmux list-windows -t noroshi-e2e -F '#{session_name} #{window_id} #{window_name}
 
 1. `make run` を実行してビルドし、Noroshi.app を起動する。
 2. Noroshi のウィンドウを最前面に表示する。
-3. サイドバーに実 tmux の `noroshi-e2e` session と window が表示され、右側に terminal が表示されることを確認する。
+3. サイドバーに実 tmux の `noroshi-e2e` session と window が表示されることを確認する (未追加ならサイドバー下部の＋で追加する)。起動直後は session 未選択で自動 attach しない (issue #48) ため、サイドバーで session を選択して右側に terminal が表示されることを確認する。
 4. 控えた値を使って通知 URL を実行する。
 
    ```sh

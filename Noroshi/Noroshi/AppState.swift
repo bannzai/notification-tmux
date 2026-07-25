@@ -192,7 +192,8 @@ final class AppState: ObservableObject {
             saveSidebarSessionIDs(sidebarSessionIDs.filter { $0 != sessionID })
         }
         if selectedSessionID == sessionID {
-            selectedSessionID = displaySessionIDs.first
+            // 残った session へ自動で移って attach しない (issue #48)。次に表示する session はユーザーが選ぶ。
+            selectedSessionID = nil
             synchronizeSelectedWindow()
         }
     }
@@ -362,8 +363,10 @@ final class AppState: ObservableObject {
             self?.receiveStopEvent(event)
         }
 
-        // 未選択、または選択中の session が消えた (kill 等) 場合は表示順の先頭にフォールバックする。
+        // 選択中の session が消えた (kill 等) 場合は選択を解除して attach を手放す。
         // これが「消えた session への再 attach ループ」を止めるガード (単一 attach の TerminalSessionManager と対で機能する)。
+        // 起動直後の未選択時も含め、別 session への自動フォールバック選択はしない: ユーザーが選んでいない
+        // session へ自動で attach すると、ssh ごしに起動した tmux session を Noroshi が勝手に掴んでしまうため (issue #48)。
         let attachedSessionID = outcome.attachedSessionName.map { TmuxID.make(hostID: TmuxHost.local.id, element: $0) }
         if NoroshiNavigation.shouldFollowAttachedSession(
             selected: selectedSessionID,
@@ -377,8 +380,8 @@ final class AppState: ObservableObject {
             // manager側も先に同期し、View更新時に同じsessionへswitchし直して履歴を壊さないようにする。
             TerminalSessionManager.shared.synchronizeCurrentSession(host: .local, sessionName: attachedSessionName)
             selectedSessionID = attachedSessionID
-        } else if selectedSessionID.map({ !displaySessionIDs.contains($0) }) ?? true {
-            selectedSessionID = displaySessionIDs.first
+        } else if selectedSessionID.map({ !displaySessionIDs.contains($0) }) == true {
+            selectedSessionID = nil
         }
         if let requestedWindowID,
            mergedSessions.lazy.flatMap(\.windows).contains(where: { $0.id == requestedWindowID })
