@@ -320,14 +320,17 @@ enum NoroshiNavigation {
         history.last(where: { (badges[$0.windowID] ?? 0) > 0 })?.windowID
     }
 
-    /// サイドバーへ追加済みの session ID savedOrder から、現在表示できる session ID を保存順で返す。
-    /// - 消えた session は表示からだけ外し、savedOrder 自体には残す (同名で復活したら再表示するため)。
-    /// - 未追加の新規 session は自動追加しない。
+    /// 現存 session ID currentIDs から、サイドバーに表示する session ID を返す。
+    /// - savedOrder (並べ替え済みの保存順) にある session を保存順で先頭に並べる。
+    /// - savedOrder に無い session も currentIDs の順で末尾に足し、自動表示する (issue #47)。
+    /// - hiddenIDs (「サイドバーから削除」した session) は表示しない。
+    /// - 消えた session は表示からだけ外し、savedOrder 自体には残す (同名で復活したら同じ位置に表示するため)。
     /// - savedOrder に重複があっても先勝ちで 1 つに畳む。
-    static func displayedSessionIDs(savedOrder: [String], currentIDs: [String]) -> [String] {
+    static func displayedSessionIDs(savedOrder: [String], currentIDs: [String], hiddenIDs: Set<String>) -> [String] {
         let currentIDSet = Set(currentIDs)
         var seenIDs = Set<String>()
-        return savedOrder.filter { currentIDSet.contains($0) && seenIDs.insert($0).inserted }
+        return (savedOrder.filter(currentIDSet.contains) + currentIDs)
+            .filter { !hiddenIDs.contains($0) && seenIDs.insert($0).inserted }
     }
 
     /// タブを閉じた後のアクティブタブ index を返す (issue #40)。

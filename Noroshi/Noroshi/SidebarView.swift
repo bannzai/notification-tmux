@@ -148,7 +148,7 @@ struct SidebarView: View {
             .help("通知が来ている window だけ表示")
             Menu {
                 if appState.availableSessions.isEmpty {
-                    Text("追加できる session はありません")
+                    Text("非表示の session はありません")
                 } else {
                     sessionPickerItems
                 }
@@ -157,7 +157,7 @@ struct SidebarView: View {
             }
             .menuStyle(.borderlessButton)
             .fixedSize()
-            .help("session をサイドバーに追加")
+            .help("非表示にした session をサイドバーへ戻す")
         }
         .font(.caption)
         .padding(.horizontal, 10)
@@ -165,7 +165,7 @@ struct SidebarView: View {
         .background(.bar)
     }
 
-    /// 追加 picker の候補行。リモート host がある場合だけ host ごとの Section で区切る (issue #38)。
+    /// 再表示 picker の候補行 (非表示中の session)。リモート host がある場合だけ host ごとの Section で区切る (issue #38)。
     @ViewBuilder
     private var sessionPickerItems: some View {
         let hosts = appState.availableSessions.map(\.host).reduce(into: [TmuxHost]()) { hosts, host in

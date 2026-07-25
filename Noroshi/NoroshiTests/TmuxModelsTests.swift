@@ -207,7 +207,6 @@ final class TmuxModelsTests: XCTestCase {
         let suiteName = "TmuxModelsTests.testBadgeApplyAndClear.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(["Focus"], forKey: "noroshi.sidebarSessionNames")
         let state = makeState(defaults: defaults)
         let event = try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Focus&window=@18"))))
         state.apply(event: event)
@@ -218,29 +217,42 @@ final class TmuxModelsTests: XCTestCase {
     }
 
     @MainActor
-    func testBadgeAppliesRemoteEventForAddedRemoteSession() throws {
-        let suiteName = "TmuxModelsTests.testBadgeAppliesRemoteEventForAddedRemoteSession.\(UUID().uuidString)"
+    func testBadgeSeparatesSameSessionNameAcrossHosts() throws {
+        let suiteName = "TmuxModelsTests.testBadgeSeparatesSameSessionNameAcrossHosts.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set(["dev:Focus"], forKey: "noroshi.sidebarSessionNames")
         let state = makeState(defaults: defaults)
-        // 同名 session でも host が違えば別バッジ。ローカル発イベントはリモート追加分に乗らない
+        // 同名 session でも host が違えば別バッジになる
         state.apply(event: try XCTUnwrap(StopEvent(payload: "session=Focus&window=@18", from: .remote("dev"))))
         state.apply(event: try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Focus&window=@18")))))
-        XCTAssertEqual(state.badges, ["dev:@18": 1])
+        XCTAssertEqual(state.badges, ["dev:@18": 1, "local:@18": 1])
     }
 
     @MainActor
-    func testBadgeIgnoresSessionNotAddedToSidebar() throws {
-        let suiteName = "TmuxModelsTests.testBadgeIgnoresSessionNotAddedToSidebar.\(UUID().uuidString)"
+    func testBadgeAppliesSessionNotInSavedOrder() throws {
+        let suiteName = "TmuxModelsTests.testBadgeAppliesSessionNotInSavedOrder.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let state = makeState(defaults: defaults)
-        let event = try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Hidden&window=@19"))))
+        // 保存順 (表示順) に載っていない session のイベントも既定で受け付ける (issue #47)
+        state.apply(event: try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Fresh&window=@19")))))
 
-        state.apply(event: event)
+        XCTAssertEqual(state.badges["local:@19"], 1)
+    }
+
+    @MainActor
+    func testBadgeIgnoresHiddenSessionAndPersistsHiddenIDs() throws {
+        let suiteName = "TmuxModelsTests.testBadgeIgnoresHiddenSessionAndPersistsHiddenIDs.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let state = makeState(defaults: defaults)
+        // 「サイドバーから削除」した session のイベントは無視する (issue #47)
+        state.removeSessionFromSidebar("local:Hidden")
+        state.apply(event: try XCTUnwrap(StopEvent(url: try XCTUnwrap(URL(string: "noroshi://stop?session=Hidden&window=@19")))))
 
         XCTAssertNil(state.badges["local:@19"])
+        // 非表示は UserDefaults に永続化され、別インスタンスでも維持される
+        XCTAssertEqual(makeState(defaults: defaults).hiddenSessionIDs, ["local:Hidden"])
     }
 
     @MainActor
@@ -429,34 +441,39 @@ final class TmuxModelsTests: XCTestCase {
     }
 
     func testDisplayedSessionIDs() {
-        // 追加済み session だけを保存順で返し、未追加の新規 session (D) は自動追加しない
+        // 保存順の session を先頭に、保存順に無い session (D) も現存順で末尾に自動表示する (issue #47)
         XCTAssertEqual(
-            NoroshiNavigation.displayedSessionIDs(savedOrder: ["local:C", "local:A", "dev:B"], currentIDs: ["local:A", "dev:B", "local:C", "local:D"]),
-            ["local:C", "local:A", "dev:B"]
+            NoroshiNavigation.displayedSessionIDs(savedOrder: ["local:C", "local:A", "dev:B"], currentIDs: ["local:A", "dev:B", "local:C", "local:D"], hiddenIDs: []),
+            ["local:C", "local:A", "dev:B", "local:D"]
+        )
+        // 非表示の session は保存順 (B)・自動表示 (D) のどちらからも除く
+        XCTAssertEqual(
+            NoroshiNavigation.displayedSessionIDs(savedOrder: ["local:A", "local:B"], currentIDs: ["local:A", "local:B", "local:C", "local:D"], hiddenIDs: ["local:B", "local:D"]),
+            ["local:A", "local:C"]
         )
         // 消えた session (X) は表示結果から落とす
         XCTAssertEqual(
-            NoroshiNavigation.displayedSessionIDs(savedOrder: ["local:X", "local:A", "local:B"], currentIDs: ["local:A", "local:B"]),
+            NoroshiNavigation.displayedSessionIDs(savedOrder: ["local:X", "local:A", "local:B"], currentIDs: ["local:A", "local:B"], hiddenIDs: []),
             ["local:A", "local:B"]
         )
-        // 保存順が空なら、現存 session があっても空
+        // 保存順が空でも現存 session をすべて表示する
         XCTAssertEqual(
-            NoroshiNavigation.displayedSessionIDs(savedOrder: [], currentIDs: ["local:A", "local:B"]),
-            []
+            NoroshiNavigation.displayedSessionIDs(savedOrder: [], currentIDs: ["local:A", "local:B"], hiddenIDs: []),
+            ["local:A", "local:B"]
         )
         // 現存が空なら空
         XCTAssertEqual(
-            NoroshiNavigation.displayedSessionIDs(savedOrder: ["local:A", "local:B"], currentIDs: []),
+            NoroshiNavigation.displayedSessionIDs(savedOrder: ["local:A", "local:B"], currentIDs: [], hiddenIDs: []),
             []
         )
         // 保存順の重複は先勝ちで 1 つに畳む
         XCTAssertEqual(
-            NoroshiNavigation.displayedSessionIDs(savedOrder: ["local:A", "local:A", "local:B"], currentIDs: ["local:A", "local:B"]),
+            NoroshiNavigation.displayedSessionIDs(savedOrder: ["local:A", "local:A", "local:B"], currentIDs: ["local:A", "local:B"], hiddenIDs: []),
             ["local:A", "local:B"]
         )
-        // 全 session が未追加なら空
+        // 全 session が非表示なら空
         XCTAssertEqual(
-            NoroshiNavigation.displayedSessionIDs(savedOrder: ["local:Z"], currentIDs: ["local:A", "local:B"]),
+            NoroshiNavigation.displayedSessionIDs(savedOrder: [], currentIDs: ["local:A", "local:B"], hiddenIDs: ["local:A", "local:B"]),
             []
         )
     }
