@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 /// 通知センターを兼ねるサイドバー。session(workspace) ごとに window を列挙し、未読バッジを数字で表示する。
+/// リモート host (issue #38) の session も同じツリーに並び、host 名のラベルで区別する。
 /// session はドラッグ&ドロップで並べ替えられ、順序は AppState (UserDefaults) に永続化される。
 struct SidebarView: View {
     @EnvironmentObject var appState: AppState
@@ -28,7 +29,7 @@ struct SidebarView: View {
             // session を Section ではなく単一 ForEach の行 (DisclosureGroup) にすることで .onMove が効く。
             // .onMove は 1 つの ForEach データソース内の行入れ替えのみ対応し、Section 間の移動はできないため。
             ForEach(appState.filteredDisplaySessions) { session in
-                DisclosureGroup(isExpanded: expansionBinding(for: session.name)) {
+                DisclosureGroup(isExpanded: expansionBinding(for: session.id)) {
                     ForEach(session.windows) { window in
                         WindowRow(
                             window: window,
@@ -43,28 +44,28 @@ struct SidebarView: View {
                     SessionHeader(
                         session: session,
                         badge: appState.badgeCount(for: session),
-                        isSelected: session.name == appState.selectedSessionName
+                        isSelected: session.id == appState.selectedSessionID
                     ) {
-                        appState.selectSession(named: session.name)
+                        appState.selectSession(id: session.id)
                     }
-                    .focused($focusedItem, equals: .session(session.name))
+                    .focused($focusedItem, equals: .session(session.id))
                     .onKeyPress(.leftArrow) {
-                        appState.setSessionExpanded(session.name, isExpanded: false)
+                        appState.setSessionExpanded(session.id, isExpanded: false)
                         return .handled
                     }
                     .onKeyPress(.rightArrow) {
-                        appState.setSessionExpanded(session.name, isExpanded: true)
+                        appState.setSessionExpanded(session.id, isExpanded: true)
                         return .handled
                     }
                     .contextMenu {
                         Button("サイドバーから削除", role: .destructive) {
-                            appState.removeSessionFromSidebar(session.name)
+                            appState.removeSessionFromSidebar(session.id)
                         }
                     }
                     // Cmd 長押し中に cmd+数字 の対象を示すガイド。フィルタ中も番号は全体の表示順 (cmd+1..9 の実際の遷移先) で振る。
                     .overlay(alignment: .trailing) {
                         if appState.isShortcutGuidePresented,
-                           let guideNumber = appState.displaySessionNames.firstIndex(of: session.name)
+                           let guideNumber = appState.displaySessionIDs.firstIndex(of: session.id)
                                .flatMap(ShortcutGuide.guideNumber(forDisplayIndex:))
                         {
                             ShortcutGuideBadge(number: guideNumber)
@@ -73,7 +74,7 @@ struct SidebarView: View {
                     }
                 }
             }
-            // フィルタ中は表示 index と全体順 (displaySessionNames) がずれ保存順が壊れるため、並べ替えを無効化する。
+            // フィルタ中は表示 index と全体順 (displaySessionIDs) がずれ保存順が壊れるため、並べ替えを無効化する。
             .onMove(perform: isFiltering ? nil : { source, destination in
                 appState.moveSessions(fromOffsets: source, toOffset: destination)
             })
@@ -97,17 +98,17 @@ struct SidebarView: View {
         }
         .onChange(of: appState.focusRequest) { _, request in
             guard request?.target == .sidebar else { return }
-            focusedItem = appState.selectedSessionName.map(FocusedItem.session)
-                ?? appState.displaySessionNames.first.map(FocusedItem.session)
+            focusedItem = appState.selectedSessionID.map(FocusedItem.session)
+                ?? appState.displaySessionIDs.first.map(FocusedItem.session)
         }
         // ↑↓ (moveSidebarSelection) や Tab で移ったフォーカスを選択へ反映し、
         // ハイライトと terminal 表示をフォーカス行へ追従させる (issue #30)。
         .onChange(of: focusedItem) { _, item in
             appState.isSidebarFocused = item != nil
             switch item {
-            case .session(let sessionName):
-                guard sessionName != appState.selectedSessionName else { return }
-                appState.selectSession(named: sessionName)
+            case .session(let sessionID):
+                guard sessionID != appState.selectedSessionID else { return }
+                appState.selectSession(id: sessionID)
             case .window(let windowID):
                 guard windowID != appState.selectedWindowID,
                       let window = appState.window(id: windowID) else { return }
@@ -149,11 +150,7 @@ struct SidebarView: View {
                 if appState.availableSessions.isEmpty {
                     Text("追加できる session はありません")
                 } else {
-                    ForEach(appState.availableSessions) { session in
-                        Button(session.name) {
-                            appState.addSessionToSidebar(session.name)
-                        }
-                    }
+                    sessionPickerItems
                 }
             } label: {
                 Image(systemName: "plus")
@@ -168,17 +165,42 @@ struct SidebarView: View {
         .background(.bar)
     }
 
+    /// 追加 picker の候補行。リモート host がある場合だけ host ごとの Section で区切る (issue #38)。
+    @ViewBuilder
+    private var sessionPickerItems: some View {
+        let hosts = appState.availableSessions.map(\.host).reduce(into: [TmuxHost]()) { hosts, host in
+            if !hosts.contains(host) { hosts.append(host) }
+        }
+        if hosts == [.local] {
+            ForEach(appState.availableSessions) { session in
+                Button(session.name) {
+                    appState.addSessionToSidebar(session.id)
+                }
+            }
+        } else {
+            ForEach(hosts, id: \.self) { host in
+                Section(host.displayName ?? "ローカル") {
+                    ForEach(appState.availableSessions.filter { $0.host == host }) { session in
+                        Button(session.name) {
+                            appState.addSessionToSidebar(session.id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     /// ↑↓ でフォーカスを表示順の隣の行へ移す。選択への反映は focusedItem の onChange が行う。
     /// フィルタ入力中は入力操作を妨げないよう処理しない。
     private func moveSidebarSelection(_ offset: Int) -> KeyPress.Result {
         guard focusedItem != .filter else { return .ignored }
         switch NoroshiNavigation.adjacentSidebarRow(
             in: appState.filteredDisplaySessions,
-            collapsedSessionNames: isFiltering ? [] : appState.collapsedSessionNames,
+            collapsedSessionIDs: isFiltering ? [] : appState.collapsedSessionIDs,
             from: currentSidebarRow,
             offset: offset)
         {
-        case .session(let sessionName): focusedItem = .session(sessionName)
+        case .session(let sessionID): focusedItem = .session(sessionID)
         case .window(let window): focusedItem = .window(window.id)
         case nil: return .ignored
         }
@@ -188,31 +210,32 @@ struct SidebarView: View {
     /// ↑↓ の起点となる行。フォーカス行を優先し、行以外にフォーカスがある場合は選択状態から解決する。
     private var currentSidebarRow: NoroshiNavigation.SidebarRow? {
         switch focusedItem {
-        case .session(let sessionName):
-            return .session(name: sessionName)
+        case .session(let sessionID):
+            return .session(id: sessionID)
         case .window(let windowID):
             return appState.window(id: windowID).map(NoroshiNavigation.SidebarRow.window)
         case .filter, nil:
             if let window = appState.selectedWindowID.flatMap(appState.window(id:)) {
                 return .window(window)
             }
-            return appState.selectedSessionName.map { .session(name: $0) }
+            return appState.selectedSessionID.map { .session(id: $0) }
         }
     }
 
     /// session の展開状態への Binding。フィルタ中は一致 window を隠さないよう常に展開扱いにする。
-    /// 非フィルタ時は collapsedSessionNames に無ければ展開扱い。
-    private func expansionBinding(for sessionName: String) -> Binding<Bool> {
+    /// 非フィルタ時は collapsedSessionIDs に無ければ展開扱い。
+    private func expansionBinding(for sessionID: String) -> Binding<Bool> {
         Binding(
-            get: { isFiltering || !appState.collapsedSessionNames.contains(sessionName) },
+            get: { isFiltering || !appState.collapsedSessionIDs.contains(sessionID) },
             set: { isExpanded in
-                appState.setSessionExpanded(sessionName, isExpanded: isExpanded)
+                appState.setSessionExpanded(sessionID, isExpanded: isExpanded)
             }
         )
     }
 }
 
 /// session 行 (DisclosureGroup のラベル)。クリックでその session の terminal を表示する。
+/// リモート session は host 名のラベルを添えて区別する。
 struct SessionHeader: View {
     /// 表示する session。
     let session: TmuxSession
@@ -229,11 +252,17 @@ struct SessionHeader: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 6) {
-                Image(systemName: "terminal")
+                Image(systemName: session.host.displayName == nil ? "terminal" : "network")
                     .foregroundStyle(isSelected ? selectedForeground : .secondary)
                 Text(session.name)
                     .fontWeight(isSelected ? .semibold : .regular)
                     .foregroundStyle(isSelected ? selectedForeground : .primary)
+                if let hostName = session.host.displayName {
+                    Text(hostName)
+                        .font(.caption2)
+                        .lineLimit(1)
+                        .foregroundStyle(isSelected ? selectedForeground.opacity(0.75) : .secondary)
+                }
                 Spacer()
                 BadgeLabel(count: badge)
             }

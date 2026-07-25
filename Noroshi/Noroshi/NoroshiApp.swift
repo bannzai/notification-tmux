@@ -33,12 +33,8 @@ struct NoroshiApp: App {
                 ContentView()
                     .environmentObject(appState)
                     .onOpenURL { url in
-                        guard let event = StopEvent(url: url),
-                              appState.sidebarSessionNames.contains(event.sessionName) else { return }
-                        appState.apply(event: event)
-                        NotificationService.shared.deliver(
-                            event: event,
-                            window: appState.window(id: event.windowID))
+                        guard let event = StopEvent(url: url) else { return }
+                        appState.receiveStopEvent(event)
                     }
                     .task {
                         appState.startPolling()
@@ -70,9 +66,31 @@ struct NavigationCommands: Commands {
         // cmd+P は標準の Print と衝突するため、Print 系メニューを空で置き換えて cmd+P をコマンドパレットへ解放する。
         CommandGroup(replacing: .printItem) {}
 
+        // cmd+W を「タブを閉じる」に割り当てるため、標準の Close (saveItem グループ) を置き換える。
+        // タブが 1 枚の時や設定ウィンドウなどメイン以外が key の時は、従来どおりウィンドウを閉じる。
+        CommandGroup(replacing: .saveItem) {
+            Button(appState.tabs.count > 1 ? "タブを閉じる" : "閉じる") {
+                if appState.tabs.count > 1, NSApp.keyWindow?.title == "Noroshi" {
+                    appState.closeTab(at: appState.activeTabIndex)
+                } else {
+                    NSApp.keyWindow?.performClose(nil)
+                }
+            }
+            .keyboardShortcut("w", modifiers: .command)
+        }
+
         CommandMenu("移動") {
             Button("新規 session") { appState.presentNewSessionPicker() }
                 .keyboardShortcut("n", modifiers: .command)
+
+            Divider()
+
+            Button("新規タブ") { appState.addTab() }
+                .keyboardShortcut("t", modifiers: .command)
+            Button("次のタブ") { appState.selectAdjacentTab(1) }
+                .keyboardShortcut(.tab, modifiers: .control)
+            Button("前のタブ") { appState.selectAdjacentTab(-1) }
+                .keyboardShortcut(.tab, modifiers: [.control, .shift])
 
             Divider()
 
@@ -185,9 +203,10 @@ final class NotificationService: NSObject, UNUserNotificationCenterDelegate {
     }
 
     /// 通知の表示内容とタップ遷移用userInfoを組み立てる。副作用を持たずユニットテスト可能。
+    /// リモート発の通知はどの host かが分かるようタイトルに host 名を添える (issue #39)。
     static func makeContent(event: StopEvent, window: TmuxWindow?) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
-        content.title = event.sessionName
+        content.title = event.host.displayName.map { "\(event.sessionName) (\($0))" } ?? event.sessionName
         if let window {
             content.body = "[\(window.index)] \(window.name) で処理が停止しました"
         } else {
