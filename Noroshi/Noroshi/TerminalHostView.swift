@@ -55,6 +55,17 @@ enum TerminalFontResolver {
         default: return nil
         }
     }
+
+    /// theme のフォント指定 (family/style/size) を解決した表示フォント。指定が無ければ base をそのまま返す。
+    /// tmux terminal (フィット縮小あり) と素のターミナル (issue #54) が同じ解決を共有する。
+    static func preferred(theme: GhosttyTheme?, base: NSFont) -> NSFont {
+        guard let theme, theme.fontFamily != nil || theme.fontStyle != nil || theme.fontSize != nil else { return base }
+        return resolve(
+            family: theme.fontFamily,
+            style: theme.fontStyle,
+            size: theme.fontSize.map { CGFloat($0) } ?? base.pointSize,
+            base: base)
+    }
 }
 
 /// tmux のようにマウスレポートを有効化した相手へ、ホイールスクロールと
@@ -394,17 +405,7 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     /// font setter は selection 解除・レイアウト再計算の副作用があるため、値が変わる時だけ代入する (docs/knowledge.md)。
     private func applyFont(to view: MouseReportingTerminalView) {
         guard let baseFont else { return }
-        let preferred: NSFont
-        if let theme, theme.fontFamily != nil || theme.fontStyle != nil || theme.fontSize != nil {
-            preferred = TerminalFontResolver.resolve(
-                family: theme.fontFamily,
-                style: theme.fontStyle,
-                size: theme.fontSize.map { CGFloat($0) } ?? baseFont.pointSize,
-                base: baseFont)
-        } else {
-            preferred = baseFont
-        }
-        let font = fittedFont(preferred: preferred, in: view)
+        let font = fittedFont(preferred: TerminalFontResolver.preferred(theme: theme, base: baseFont), in: view)
         if view.font.fontName != font.fontName || view.font.pointSize != font.pointSize {
             view.font = font
             // SwiftTerm の font setter (resetFont) は terminal.softReset() でスクロール領域等を tmux に知らせず
@@ -611,8 +612,9 @@ struct TerminalHostView: NSViewRepresentable {
         if takesFocus { manager.focusTerminal() }
     }
 
-    /// terminal をコンテナ全面に固定して取り付ける。manager の切替失敗時の作り直しでも同じ取り付けを使う。
-    fileprivate static func pin(_ terminal: NSView, in container: NSView) {
+    /// terminal をコンテナ全面に固定して取り付ける。manager の切替失敗時の作り直しと
+    /// 素のターミナル (PlainTerminalHostView, issue #54) でも同じ取り付けを使う。
+    static func pin(_ terminal: NSView, in container: NSView) {
         terminal.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(terminal)
         NSLayoutConstraint.activate([
