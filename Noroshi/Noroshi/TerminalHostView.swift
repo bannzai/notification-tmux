@@ -522,6 +522,13 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         let font = fittedFont(preferred: preferred, in: view)
         if view.font.fontName != font.fontName || view.font.pointSize != font.pointSize {
             view.font = font
+            // SwiftTerm の font setter (resetFont) は terminal.softReset() でスクロール領域等を tmux に知らせず
+            // 全画面へ戻すため、格子が変わらない font 変更では SIGWINCH が発生せず tmux 側のスクロール領域
+            // キャッシュが実状態とずれたままになり、pane スクロールのたびに画面全体がせり上がって崩れる。
+            // resetFont は scroller 幅を引かずに cols を計算するので、同じ frame で setFrameSize を呼び直すと
+            // processSizeChange が scroller 幅を引いた必ず異なる cols へ再リサイズし、実サイズ変更 (SIGWINCH)
+            // として tmux の全キャッシュ破棄 (tty_invalidate) と全再描画を強制できる (ADR 0010)。
+            view.setFrameSize(view.frame.size)
         }
     }
 
