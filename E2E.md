@@ -25,6 +25,12 @@ tmux list-windows -t noroshi-e2e -F '#{session_name} #{window_id} #{window_name}
    open -g "noroshi://stop?session=noroshi-e2e&window=@<window_id>"
    ```
 
+   インストール済みの Noroshi (/Applications 等) が LaunchServices に登録されていると、`open -g "noroshi://..."` はそちらを起動して URL イベントを奪う。開発ビルドを検証する時は `-a` で配送先を名指しする。
+
+   ```sh
+   open -g -a "$PWD/tmp/DerivedData/Build/Products/Debug/Noroshi.app" "noroshi://stop?session=noroshi-e2e&window=@<window_id>"
+   ```
+
 5. 対象 window に未読バッジが付き、対象 window を選択するとバッジが消えることを確認する。
 6. タブが関係する変更では、「移動 > 新規タブ」(cmd+T) でタブバーが表示され、タブ切替 (ctrl+tab) で選択 session がタブごとに保たれ、「File > タブを閉じる」(cmd+W) で閉じられることを確認する。
 7. リモートホスト (ssh) が関係する変更では、鍵認証で入れる ssh 先がある場合のみ `~/.config/noroshi/config` に `remote-host = <host>` を追記し、リモート session の一覧表示・attach・切替を確認する (確認後に追記を戻す)。ssh 先が無い環境ではユニットテストとローカル経路の確認までとし、報告に未検証と明記する。
