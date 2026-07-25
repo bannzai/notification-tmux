@@ -120,6 +120,11 @@ struct NavigationCommands: Commands {
             }
         }
 
+        CommandMenu("ターミナル") {
+            Button("画像・ファイルをシェア…") { TerminalSessionManager.shared.presentFileSharePanel() }
+                .keyboardShortcut("i", modifiers: [.command, .shift])
+        }
+
         CommandMenu("表示") {
             Button(appState.sidebarVisibility == .detailOnly ? "サイドバーを表示" : "サイドバーを非表示") {
                 appState.toggleSidebar()
