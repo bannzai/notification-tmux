@@ -54,6 +54,22 @@ enum NoroshiConfig {
         try text.write(to: URL(fileURLWithPath: path), atomically: true, encoding: .utf8)
     }
 
+    /// config の `remote-host` キー (複数指定可) で宣言された ssh 接続先を記述順で返す (issue #38)。
+    /// 重複は先勝ちで畳む (同じ host へ二重にポーリングしないため)。config が無ければ空。
+    static func remoteHosts() -> [String] {
+        parseRemoteHosts(configText: readPreferredConfigText())
+    }
+
+    /// config テキストから `remote-host = <ssh接続先>` を抽出する純粋ロジック。行形式は GhosttyTheme.parseLine に委ねる。
+    static func parseRemoteHosts(configText: String) -> [String] {
+        var seenHosts = Set<String>()
+        return configText.split(separator: "\n", omittingEmptySubsequences: false)
+            .compactMap { GhosttyTheme.parseLine(String($0)) }
+            .filter { $0.key == "remote-host" && !$0.value.isEmpty }
+            .map(\.value)
+            .filter { seenHosts.insert($0).inserted }
+    }
+
     /// 探索ディレクトリから見つかるテーマファイル名の一覧 (重複除去・ソート)。設定ウィンドウのテーマ Picker 用。
     /// ディレクトリが無ければスキップする。隠しファイルは除外する。
     static func availableThemeNames() -> [String] {

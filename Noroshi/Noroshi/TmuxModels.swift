@@ -1,9 +1,54 @@
 import Foundation
 
+/// tmux サーバの所在。ローカル、または ssh で接続するリモートホスト (issue #38)。
+enum TmuxHost: Hashable {
+    case local
+    /// ssh の接続先 (`~/.ssh/config` の Host 名や user@host)。config の `remote-host` で指定する。
+    case remote(String)
+
+    /// 複合 ID (session / window の host 修飾) に使う識別子。
+    /// ローカルは予約名 "local"。同名の ssh 接続先を定義した場合はローカルと区別できない (README に明記)。
+    var id: String {
+        switch self {
+        case .local: return "local"
+        case .remote(let sshDestination): return sshDestination
+        }
+    }
+
+    /// id 文字列からの逆変換。
+    init(id: String) {
+        self = id == TmuxHost.local.id ? .local : .remote(id)
+    }
+
+    /// サイドバー・タブ・通知での表示名。ローカルは表示しないため nil。
+    var displayName: String? {
+        switch self {
+        case .local: return nil
+        case .remote(let sshDestination): return sshDestination
+        }
+    }
+}
+
+/// host をまたいで一意な複合 ID (`<hostID>:<要素>`) の組み立てと分解。
+/// tmux は session 名の `:` を `_` へ置換し、window_id は `@数字` のため、要素側に `:` は現れない。
+/// host 側 (IPv6 アドレス等) には `:` が含まれ得るので、分解は最後の `:` で行う。
+enum TmuxID {
+    static func make(hostID: String, element: String) -> String {
+        "\(hostID):\(element)"
+    }
+
+    static func split(_ id: String) -> (hostID: String, element: String)? {
+        guard let separatorIndex = id.lastIndex(of: ":") else { return nil }
+        return (String(id[..<separatorIndex]), String(id[id.index(after: separatorIndex)...]))
+    }
+}
+
 /// tmux の 1 window。サイドバーの行 1 つに対応する。
 struct TmuxWindow: Identifiable, Equatable, Hashable {
-    /// tmux の window_id (例 "@42")。サーバ全体でユニークかつ改名・並べ替えに影響されない SSOT。
-    let id: String
+    /// この window がある tmux サーバ。
+    let host: TmuxHost
+    /// tmux の window_id (例 "@42")。同一サーバ内でユニークかつ改名・並べ替えに影響されない。
+    let windowID: String
     /// この window が属する session 名。
     let sessionName: String
     /// session 内での window index。表示順に使う。
@@ -14,6 +59,11 @@ struct TmuxWindow: Identifiable, Equatable, Hashable {
     let isActive: Bool
     /// window 内の pane 数。
     let paneCount: Int
+
+    /// host をまたいで一意な識別子。バッジ台帳・選択状態のキー (issue #38: ローカルとリモートで @n が衝突するため)。
+    var id: String { TmuxID.make(hostID: host.id, element: windowID) }
+    /// この window が属する session の複合 ID。
+    var sessionID: String { TmuxID.make(hostID: host.id, element: sessionName) }
 }
 
 /// tmux window の格子サイズ (列 × 行)。表示フォントのフィット計算 (issue #36) の入力。
@@ -26,15 +76,17 @@ struct TmuxWindowGrid: Equatable {
 
 /// tmux の 1 session。cmux でいう workspace に対応する。
 struct TmuxSession: Identifiable, Equatable, Hashable {
-    /// session 名。tmux 上で一意なのでそのまま識別子にする。
-    let id: String
+    /// この session がある tmux サーバ。
+    let host: TmuxHost
+    /// session 名。同一サーバ内で一意。
+    let name: String
     /// この session に attach しているクライアント数。
     let attachedClients: Int
     /// session 配下の window (index 昇順)。
     var windows: [TmuxWindow]
 
-    /// 表示用の session 名。
-    var name: String { id }
+    /// host をまたいで一意な識別子。サイドバー保存順・選択状態のキー。
+    var id: String { TmuxID.make(hostID: host.id, element: name) }
 }
 
 /// tmux のフォーマット文字列と、その出力のパーサ。
@@ -53,14 +105,14 @@ enum TmuxFormat {
     /// `display-message -p` 用。attach 中 session のカレント window の格子サイズを取得する。
     static let windowGridFormat = "#{window_width}\u{1f}#{window_height}"
 
-    /// `windowFormat` で出力された 1 行を TmuxWindow にする。形式が合わない行は nil。
-    static func parseWindowLine(_ line: String) -> TmuxWindow? {
+    /// `windowFormat` で出力された 1 行を host 上の TmuxWindow にする。形式が合わない行は nil。
+    static func parseWindowLine(_ line: String, host: TmuxHost = .local) -> TmuxWindow? {
         let parts = line.split(separator: fieldSeparator, omittingEmptySubsequences: false).map(String.init)
         guard parts.count == 6,
               parts[1].hasPrefix("@"),
               let index = Int(parts[2]),
               let panes = Int(parts[5]) else { return nil }
-        return TmuxWindow(id: parts[1], sessionName: parts[0], index: index,
+        return TmuxWindow(host: host, windowID: parts[1], sessionName: parts[0], index: index,
                           name: parts[3], isActive: parts[4] == "1", paneCount: panes)
     }
 
@@ -101,45 +153,71 @@ enum TmuxFormat {
     }
 }
 
-/// Claude Code の Stop hook から `noroshi://stop?session=<name>&window=@n` で届く通知イベント。
+/// Claude Code の Stop hook から届く通知イベント。
+/// ローカルは `noroshi://stop?session=<name>&window=@n` の URL スキーム、
+/// リモートは ssh -R でフォワードされた socket 経由の同形式クエリで届く (issue #39)。
 struct StopEvent: Equatable {
+    /// 発火元の tmux サーバ。
+    let host: TmuxHost
     /// 発火元 tmux session 名。
     let sessionName: String
     /// 発火元 tmux window の window_id (@n)。
     let windowID: String
 
-    // URL スキーム経由の入力だけを受け付けるバリデーションのため failable init にしている
+    /// 発火元 session の複合 ID (TmuxSession.id と同形式)。
+    var sessionID: String { TmuxID.make(hostID: host.id, element: sessionName) }
+    /// バッジ台帳のキー (TmuxWindow.id と同形式)。
+    var windowKey: String { TmuxID.make(hostID: host.id, element: windowID) }
+
+    // URL スキーム / socket 経由の入力だけを受け付けるバリデーションのため failable init にしている
     init?(url: URL) {
-        guard url.scheme == "noroshi",
-              url.host == "stop",
-              let queryItems = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+        guard url.scheme == "noroshi", url.host == "stop" else { return nil }
+        // `host` クエリはデバッグ用にリモート発火を模擬する入口 (通常のローカル hook は付けない)
+        self.init(queryItems: URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems, hostOverride: nil)
+    }
+
+    /// リモート socket が受信した 1 行 (`session=<enc>&window=@n`) をイベントにする。
+    /// 受信経路 (host ごとの listener) が発火元 host を確定するため、クエリの host より優先する。
+    init?(payload: String, from host: TmuxHost) {
+        self.init(
+            queryItems: URLComponents(string: "noroshi://stop?" + payload.trimmingCharacters(in: .whitespacesAndNewlines))?.queryItems,
+            hostOverride: host)
+    }
+
+    // クエリのバリデーションを URL / socket 経路で共有するため定義している
+    private init?(queryItems: [URLQueryItem]?, hostOverride: TmuxHost?) {
+        guard let queryItems,
               let session = queryItems.first(where: { $0.name == "session" })?.value,
               let window = queryItems.first(where: { $0.name == "window" })?.value,
               !session.isEmpty,
               window.hasPrefix("@")
         else { return nil }
+        host = hostOverride
+            ?? queryItems.first(where: { $0.name == "host" })?.value.flatMap { $0.isEmpty ? nil : TmuxHost(id: $0) }
+            ?? .local
         sessionName = session
         windowID = window
     }
 
-    /// macOS 通知の userInfo から Stop イベントを復元する。
+    /// macOS 通知の userInfo から Stop イベントを復元する。host 未収録の旧通知はローカル扱い。
     init?(userInfo: [AnyHashable: Any]) {
         guard let session = userInfo["session"] as? String,
               let window = userInfo["window"] as? String,
               !session.isEmpty,
               window.hasPrefix("@")
         else { return nil }
+        host = (userInfo["host"] as? String).flatMap { $0.isEmpty ? nil : TmuxHost(id: $0) } ?? .local
         sessionName = session
         windowID = window
     }
 
     /// macOS 通知へ保存できる property list 形式の値。
     var userInfo: [String: String] {
-        ["session": sessionName, "window": windowID]
+        ["session": sessionName, "window": windowID, "host": host.id]
     }
 }
 
-/// Noroshi が attach している tmux client。PID で SwiftTerm の子プロセスと対応付ける。
+/// Noroshi が attach している tmux client。PID で SwiftTerm の子プロセスと対応付ける (ローカル host のみ)。
 struct TmuxAttachedClient: Equatable {
     let pid: Int32
     let tty: String
@@ -169,18 +247,27 @@ enum TmuxSessionNaming {
 /// Stop hook 由来の通知 1 件の受信記録。「最新の通知へジャンプ」(cmd+shift+n) の解決に使う。
 /// バッジ台帳 (windowID -> 未読数) とは別に、発生順を保持するために持つ。
 struct NotificationRecord: Equatable {
-    /// 通知が発火した window の window_id (@n)。
+    /// 通知が発火した window の複合 ID (TmuxWindow.id)。
     let windowID: String
     /// 受信時刻。
     let receivedAt: Date
+}
+
+/// terminal 表示のタブ 1 枚 (issue #40)。タブごとに選択中の session/window を保持する。
+struct TerminalTab: Identifiable, Equatable {
+    let id: UUID
+    /// このタブで表示する session の複合 ID (TmuxSession.id)。nil は未選択。
+    var sessionID: String?
+    /// このタブでサイドバー選択表示する window の複合 ID (TmuxWindow.id)。
+    var windowID: String?
 }
 
 /// session/window の移動先を計算する純粋ロジック。実 tmux に依存しないためユニットテスト可能。
 enum NoroshiNavigation {
     /// サイドバーのキーボードナビゲーション (↑↓) が辿る行。表示順の session 行と展開中の window 行。
     enum SidebarRow: Equatable {
-        /// session 行。
-        case session(name: String)
+        /// session 行。値は複合 session ID。
+        case session(id: String)
         /// window 行。
         case window(TmuxWindow)
     }
@@ -189,13 +276,13 @@ enum NoroshiNavigation {
     /// current から offset 隣の行を返す (端では停止)。current が nil または表示行に無い場合は先頭行を返す。
     static func adjacentSidebarRow(
         in sessions: [TmuxSession],
-        collapsedSessionNames: Set<String>,
+        collapsedSessionIDs: Set<String>,
         from current: SidebarRow?,
         offset: Int
     ) -> SidebarRow? {
         let rows = sessions.flatMap { session -> [SidebarRow] in
-            [.session(name: session.name)]
-                + (collapsedSessionNames.contains(session.name) ? [] : session.windows.map(SidebarRow.window))
+            [.session(id: session.id)]
+                + (collapsedSessionIDs.contains(session.id) ? [] : session.windows.map(SidebarRow.window))
         }
         guard let current, let currentIndex = rows.firstIndex(of: current) else { return rows.first }
         return rows[max(0, min(rows.count - 1, currentIndex + offset))]
@@ -207,24 +294,24 @@ enum NoroshiNavigation {
         selected: String?,
         managed: String?,
         attached: String?,
-        availableNames: Set<String>
+        availableIDs: Set<String>
     ) -> Bool {
-        guard let attached, availableNames.contains(attached) else { return false }
+        guard let attached, availableIDs.contains(attached) else { return false }
         return attached != selected && managed == selected
     }
 
-    /// 表示順 sessionNames の中で current から offset だけ移動した session 名を返す (末尾↔先頭で循環)。
+    /// 表示順 sessionIDs の中で current から offset だけ移動した session ID を返す (末尾↔先頭で循環)。
     /// current が nil または一覧に無い場合は先頭を返す。
-    static func adjacentSessionName(in sessionNames: [String], from current: String?, offset: Int) -> String? {
-        guard !sessionNames.isEmpty else { return nil }
-        guard let current, let currentIndex = sessionNames.firstIndex(of: current) else { return sessionNames.first }
-        let count = sessionNames.count
-        return sessionNames[((currentIndex + offset) % count + count) % count]
+    static func adjacentSessionID(in sessionIDs: [String], from current: String?, offset: Int) -> String? {
+        guard !sessionIDs.isEmpty else { return nil }
+        guard let current, let currentIndex = sessionIDs.firstIndex(of: current) else { return sessionIDs.first }
+        let count = sessionIDs.count
+        return sessionIDs[((currentIndex + offset) % count + count) % count]
     }
 
-    /// 表示順 sessionNames の displayIndex 番目 (0 始まり) の session 名。範囲外は nil。
-    static func sessionName(in sessionNames: [String], atDisplayIndex displayIndex: Int) -> String? {
-        sessionNames.indices.contains(displayIndex) ? sessionNames[displayIndex] : nil
+    /// 表示順 sessionIDs の displayIndex 番目 (0 始まり) の session ID。範囲外は nil。
+    static func sessionID(in sessionIDs: [String], atDisplayIndex displayIndex: Int) -> String? {
+        sessionIDs.indices.contains(displayIndex) ? sessionIDs[displayIndex] : nil
     }
 
     /// 通知履歴 (古い順) とバッジ台帳から、最も新しく受信しかつ未読が残っている windowID を返す。
@@ -233,13 +320,22 @@ enum NoroshiNavigation {
         history.last(where: { (badges[$0.windowID] ?? 0) > 0 })?.windowID
     }
 
-    /// サイドバーへ追加済みの session 名 savedOrder から、現在表示できる session 名を保存順で返す。
-    /// - 消えた session は表示からだけ外し、savedOrder 自体には残す (同名で復活したら再表示するため)。
-    /// - 未追加の新規 session は自動追加しない。
+    /// 現存 session ID currentIDs から、サイドバーに表示する session ID を返す。
+    /// - savedOrder (並べ替え済みの保存順) にある session を保存順で先頭に並べる。
+    /// - savedOrder に無い session も currentIDs の順で末尾に足し、自動表示する (issue #47)。
+    /// - hiddenIDs (「サイドバーから削除」した session) は表示しない。
+    /// - 消えた session は表示からだけ外し、savedOrder 自体には残す (同名で復活したら同じ位置に表示するため)。
     /// - savedOrder に重複があっても先勝ちで 1 つに畳む。
-    static func displayedSessionNames(savedOrder: [String], currentNames: [String]) -> [String] {
-        let currentNameSet = Set(currentNames)
-        var seenNames = Set<String>()
-        return savedOrder.filter { currentNameSet.contains($0) && seenNames.insert($0).inserted }
+    static func displayedSessionIDs(savedOrder: [String], currentIDs: [String], hiddenIDs: Set<String>) -> [String] {
+        let currentIDSet = Set(currentIDs)
+        var seenIDs = Set<String>()
+        return (savedOrder.filter(currentIDSet.contains) + currentIDs)
+            .filter { !hiddenIDs.contains($0) && seenIDs.insert($0).inserted }
+    }
+
+    /// タブを閉じた後のアクティブタブ index を返す (issue #40)。
+    /// 閉じた位置より左がアクティブなら変わらず、アクティブ自身または右を閉じた場合は範囲内へ収める。
+    static func activeTabIndexAfterClosing(at closedIndex: Int, activeIndex: Int, remainingCount: Int) -> Int {
+        closedIndex < activeIndex ? activeIndex - 1 : min(activeIndex, remainingCount - 1)
     }
 }

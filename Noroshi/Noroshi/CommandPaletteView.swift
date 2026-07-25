@@ -9,8 +9,8 @@ private typealias Color = SwiftUI.Color
 struct PaletteItem: Identifiable, Equatable {
     /// 候補の種別。表示・遷移先の分岐に使う。値として元オブジェクトを保持し、表示文字列は算出する。
     enum Kind: Equatable {
-        /// session 行。値は session 名。
-        case session(name: String)
+        /// session 行。値は対象 session。
+        case session(TmuxSession)
         /// window 行。値は対象 window。
         case window(TmuxWindow)
     }
@@ -20,20 +20,21 @@ struct PaletteItem: Identifiable, Equatable {
     /// 未読バッジ数 (session 行は配下 window の合計、window 行は自身の未読数)。
     let badge: Int
 
-    /// 一覧内で一意な識別子。session 行は session 名、window 行は window_id (@n) で衝突しない。
+    /// 一覧内で一意な識別子。host 込みの複合 ID (TmuxSession.id / TmuxWindow.id) で host をまたいでも衝突しない。
     var id: String {
         switch kind {
-        case .session(let name): return name
+        case .session(let session): return session.id
         case .window(let window): return window.id
         }
     }
 
-    /// fuzzy マッチ対象の文字列。session 行は session 名、window 行は "session名 window名" で
-    /// session 名でも window 名でも絞り込めるようにする。
+    /// fuzzy マッチ対象の文字列。session 名・window 名に加え、リモートは host 名でも絞り込めるようにする。
     var matchText: String {
         switch kind {
-        case .session(let name): return name
-        case .window(let window): return "\(window.sessionName) \(window.name)"
+        case .session(let session):
+            return [session.host.displayName, session.name].compactMap { $0 }.joined(separator: " ")
+        case .window(let window):
+            return [window.host.displayName, window.sessionName, window.name].compactMap { $0 }.joined(separator: " ")
         }
     }
 }
@@ -237,14 +238,22 @@ struct PaletteRow: View {
         .contentShape(Rectangle())
     }
 
-    /// session 行 / window 行の主表示。
+    /// session 行 / window 行の主表示。リモートは host 名を先頭に添える。
     @ViewBuilder
     private var content: some View {
         switch item.kind {
-        case .session(let name):
-            Text(name).fontWeight(.medium)
+        case .session(let session):
+            HStack(spacing: 4) {
+                if let hostName = session.host.displayName {
+                    Text(hostName).font(.caption).foregroundStyle(secondaryStyle)
+                }
+                Text(session.name).fontWeight(.medium)
+            }
         case .window(let window):
             HStack(spacing: 4) {
+                if let hostName = window.host.displayName {
+                    Text(hostName).font(.caption).foregroundStyle(secondaryStyle)
+                }
                 Text(window.sessionName).foregroundStyle(secondaryStyle)
                 Text("›").foregroundStyle(secondaryStyle)
                 Text(window.name)

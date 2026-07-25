@@ -55,6 +55,25 @@ final class NoroshiConfigTests: XCTestCase {
         XCTAssertEqual(theme?.background, color8(0x11, 0x11, 0x11))
     }
 
+    // MARK: - remote-host (issue #38)
+
+    func testParseRemoteHostsは記述順を保ち重複を先勝ちで畳む() {
+        let configText = """
+        # コメント行や他のキーは無視する
+        background = #111111
+        remote-host = dev-machine
+        remote-host = user@build-server
+        remote-host = dev-machine
+        remote-host =
+        """
+        XCTAssertEqual(NoroshiConfig.parseRemoteHosts(configText: configText), ["dev-machine", "user@build-server"])
+    }
+
+    func testParseRemoteHostsは未指定なら空() {
+        XCTAssertEqual(NoroshiConfig.parseRemoteHosts(configText: "background = #111111"), [])
+        XCTAssertEqual(NoroshiConfig.parseRemoteHosts(configText: ""), [])
+    }
+
     func testFallsBackToGhosttyContentWhenNoroshiMissingOnDisk() throws {
         let dir = try makeTempDirectory()
         let noroshi = dir.appendingPathComponent("noroshi-config")  // 作らない

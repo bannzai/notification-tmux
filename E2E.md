@@ -20,16 +20,24 @@ tmux list-windows -t noroshi-e2e -F '#{session_name} #{window_id} #{window_name}
 
 1. `make run` を実行してビルドし、Noroshi.app を起動する。
 2. Noroshi のウィンドウを最前面に表示する。
-3. サイドバーに実 tmux の `noroshi-e2e` session と window が表示され、右側に terminal が表示されることを確認する。
+3. サイドバーに実 tmux の `noroshi-e2e` session と window が表示されることを確認する (未追加ならサイドバー下部の＋で追加する)。起動直後は session 未選択で自動 attach しない (issue #48) ため、サイドバーで session を選択して右側に terminal が表示されることを確認する。
 4. 控えた値を使って通知 URL を実行する。
 
    ```sh
    open -g "noroshi://stop?session=noroshi-e2e&window=@<window_id>"
    ```
 
+   インストール済みの Noroshi (/Applications 等) が LaunchServices に登録されていると、`open -g "noroshi://..."` はそちらを起動して URL イベントを奪う。開発ビルドを検証する時は `-a` で配送先を名指しする。
+
+   ```sh
+   open -g -a "$PWD/tmp/DerivedData/Build/Products/Debug/Noroshi.app" "noroshi://stop?session=noroshi-e2e&window=@<window_id>"
+   ```
+
 5. 対象 window に未読バッジが付き、対象 window を選択するとバッジが消えることを確認する。
-6. 日本語 IME が関係する変更では、変換前の文字列がキャレット付近に表示され、文字を短縮・削除したときに古い文字が残らないことを確認する。
-7. 確認結果を残すため、Noroshi の画面が見える状態でスクリーンショットを撮る。
+6. タブが関係する変更では、「移動 > 新規タブ」(cmd+T) でタブバーが表示され、タブ切替 (ctrl+tab) で選択 session がタブごとに保たれ、「File > タブを閉じる」(cmd+W) で閉じられることを確認する。
+7. リモートホスト (ssh) が関係する変更では、鍵認証で入れる ssh 先がある場合のみ `~/.config/noroshi/config` に `remote-host = <host>` を追記し、リモート session の一覧表示・attach・切替を確認する (確認後に追記を戻す)。ssh 先が無い環境ではユニットテストとローカル経路の確認までとし、報告に未検証と明記する。
+8. 日本語 IME が関係する変更では、変換前の文字列がキャレット付近に表示され、文字を短縮・削除したときに古い文字が残らないことを確認する。
+9. 確認結果を残すため、Noroshi の画面が見える状態でスクリーンショットを撮る。
 
    ```sh
    mkdir -p tmp/e2e
@@ -45,6 +53,13 @@ worktree が分かれていても、Agent 間で macOS の GUI セッション�
 - E2E とスクリーンショットは同じ GUI セッションで同時に実行しない。
 - 可能なら Agent ごとに専用 tmux session と専用 macOS ユーザーセッションを使う。
 - `screencapture -l` を使う場合も、対象ウィンドウが最小化・非表示になっていないことを確認する。
+- 最前面の取り合いを避けるには、対象 Noroshi の pid から CGWindowID を取得し、`screencapture -l <CGWindowID> -x` でウィンドウを直接撮影する (最前面でなくても撮影できる)。
+
+  ```sh
+  swift -e 'import CoreGraphics; let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]; for w in info where (w["kCGWindowOwnerPID"] as? Int) == <pid> && (w["kCGWindowLayer"] as? Int) == 0 { print(w["kCGWindowNumber"] ?? "") }'
+  ```
+
+- 別 Agent の tmux 操作 (switch-client 等) で対象 client の接続先が変わることがある。撮影の直前・直後に `tmux list-clients -F '#{client_pid} #{client_session}'` で attach 先が想定 session のままかを確認し、変わっていたら戻して撮り直す。
 
 ## PR / Issue へのスクリーンショット添付
 

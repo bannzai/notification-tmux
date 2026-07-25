@@ -57,24 +57,18 @@ enum TerminalFontResolver {
     }
 }
 
-/// tmux のようにマウスレポートを有効化した相手へ、SwiftTerm 1.13.0 が取りこぼす
-/// ホイールスクロールと buttonEventTracking (DECSET 1002) のドラッグ motion を SGR レポートとして送出する
-/// terminal view。SwiftTerm 本体 (checkouts) は改変不可で、かつ TerminalView の
+/// tmux のようにマウスレポートを有効化した相手へ、ホイールスクロールと
+/// buttonEventTracking (DECSET 1002) のドラッグ motion を SGR レポートとして送出する terminal view。
+/// SwiftTerm 1.13.0 はこれらのレポートを view 自身が送らず、かつ TerminalView の
 /// scrollWheel / mouseDragged は `public`(非 `open`) override のため別モジュールから再 override できない。
-/// そのため TerminalSessionManager 側の NSEvent local monitor から本 view の public メソッドを呼んで補う。
-///
-/// SwiftTerm 1.13.0 の取りこぼし箇所 (Mac/MacTerminalView.swift):
-/// - scrollWheel はマウスモードを一切見ずに常にローカルスクロールバックを操作し、レポートを送らない。
-///   tmux 側にホイールが届かず copy-mode スクロールが起きない。
-/// - mouseDragged は `mouseMode.sendMotionEvent()` (anyEvent=1003 のみ true) が偽だと早期 return し、
-///   buttonEventTracking (1002) のドラッグ motion を送らない。tmux の pane 境界ドラッグ (resize) が効かない。
+/// そのため TerminalSessionManager 側の NSEvent local monitor でイベントを view より先に消費し、
+/// 本 view の public メソッドを呼んで送出する (ADR 0003)。
+/// 現在 pin している SwiftTerm (d5ee56e, ADR 0011) は upstream 側でも同種のレポートを実装したが、
+/// monitor が先にイベントを消費するため二重送出にはならず、リンククリック検出 (ADR 0006) と
+/// 一体のこの経路を維持している。
 final class MouseReportingTerminalView: LocalProcessTerminalView {
     /// 精密スクロール (トラックパッド) の端数を貯め、セル高ごとに 1 tick へ量子化するための累積値。
     private var scrollAccumulator: CGFloat = 0
-    /// IME が変換中の未確定文字。SwiftTerm 1.13.0 では macOS 側の marked text 描画が未実装なためここで保持する。
-    private var markedTextStorage: NSAttributedString?
-    /// 未確定文字を terminal のキャレット位置に表示する overlay。
-    private var markedTextOverlay: NSTextField?
 
     // MARK: - Drag & Drop
 
@@ -106,119 +100,6 @@ final class MouseReportingTerminalView: LocalProcessTerminalView {
         // 続けてプロンプトを打てるよう、ドロップ完了後は terminal へフォーカスを移す。
         TerminalSessionManager.shared.focusTerminal()
         return true
-    }
-
-    // MARK: - NSTextInputClient
-
-    /// IME が確定文字を送る直前に未確定文字の overlay を片付ける。
-    override func insertText(_ string: Any, replacementRange: NSRange) {
-        clearMarkedText()
-        super.insertText(string, replacementRange: replacementRange)
-    }
-
-    /// IME の未確定文字を更新し、terminal には送らずキャレット上に preview する。
-    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
-        switch string {
-        case let attributed as NSAttributedString:
-            markedTextStorage = attributed.length > 0 ? attributed : nil
-        case let nsString as NSString:
-            markedTextStorage = nsString.length > 0 ? NSAttributedString(string: nsString as String) : nil
-        case let plain as String:
-            markedTextStorage = plain.isEmpty ? nil : NSAttributedString(string: plain)
-        default:
-            markedTextStorage = nil
-        }
-        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
-        updateMarkedTextOverlay()
-    }
-
-    /// IME が変換を終了したら overlay を確実に外し、削除済み文字の残像を残さない。
-    override func unmarkText() {
-        clearMarkedText()
-        super.unmarkText()
-    }
-
-    /// 選択範囲がないときも IME が入力位置を特定できるよう、現在の cursor 位置を返す。
-    override func selectedRange() -> NSRange {
-        let selection = super.selectedRange()
-        guard selection.location == NSNotFound else { return selection }
-        let terminal = getTerminal()
-        return NSRange(location: terminal.buffer.y * terminal.cols + terminal.buffer.x, length: 0)
-    }
-
-    override func markedRange() -> NSRange {
-        guard let markedTextStorage else {
-            return NSRange(location: NSNotFound, length: 0)
-        }
-        return NSRange(location: 0, length: markedTextStorage.length)
-    }
-
-    override func hasMarkedText() -> Bool {
-        markedTextStorage != nil
-    }
-
-    override func attributedSubstring(
-        forProposedRange range: NSRange,
-        actualRange: NSRangePointer?
-    ) -> NSAttributedString? {
-        guard let markedTextStorage,
-              range.location != NSNotFound,
-              range.location < markedTextStorage.length
-        else { return nil }
-        let clampedRange = NSRange(
-            location: range.location,
-            length: min(range.length, markedTextStorage.length - range.location)
-        )
-        guard clampedRange.length > 0 else { return nil }
-        actualRange?.pointee = clampedRange
-        return markedTextStorage.attributedSubstring(from: clampedRange)
-    }
-
-    override func validAttributesForMarkedText() -> [NSAttributedString.Key] {
-        [.underlineStyle, .markedClauseSegment, .glyphInfo]
-    }
-
-    /// 未確定文字の内容と長さに合わせて overlay を更新する。空なら再描画のため view 階層から取り除く。
-    private func updateMarkedTextOverlay() {
-        guard let markedTextStorage, markedTextStorage.length > 0 else {
-            markedTextOverlay?.removeFromSuperview()
-            markedTextOverlay = nil
-            return
-        }
-
-        let overlay: NSTextField
-        if let markedTextOverlay {
-            overlay = markedTextOverlay
-        } else {
-            overlay = NSTextField(labelWithString: "")
-            overlay.isBezeled = false
-            overlay.isEditable = false
-            overlay.drawsBackground = true
-            overlay.wantsLayer = true
-            overlay.layer?.cornerRadius = 3
-            addSubview(overlay, positioned: .above, relativeTo: nil)
-            markedTextOverlay = overlay
-        }
-
-        overlay.backgroundColor = nativeBackgroundColor.withAlphaComponent(0.9)
-        let displayString = NSMutableAttributedString(attributedString: markedTextStorage)
-        displayString.addAttributes([
-            .font: font,
-            .foregroundColor: nativeForegroundColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-        ], range: NSRange(location: 0, length: displayString.length))
-        overlay.attributedStringValue = displayString
-        overlay.sizeToFit()
-        overlay.frame.origin = caretFrame.origin
-        if overlay.frame.maxX > bounds.maxX {
-            overlay.frame.origin.x = max(0, bounds.maxX - overlay.frame.width)
-        }
-    }
-
-    /// 呼び出しを重ねても同じ空状態に収束する後始末。
-    private func clearMarkedText() {
-        markedTextStorage = nil
-        updateMarkedTextOverlay()
     }
 
     /// attach 先がマウスレポート (DECSET 1000/1002/1003) を要求している状態か。
@@ -299,18 +180,21 @@ final class MouseReportingTerminalView: LocalProcessTerminalView {
 }
 
 /// 表示中の session だけを attach する単一 attach 方式の terminal 管理 (issue #6)。
-/// 常時 attach client は最大 1 本。session 切替時は同じ client を `switch-client` し、tmux の直前session履歴を保つ。
+/// 常時 attach client は最大 1 本。同一 host 内の session 切替は同じ client を `switch-client` し、tmux の直前session履歴を保つ。
+/// リモート host (issue #38) は `ssh -t` で attach し、host をまたぐ切替は client を引き継げないため作り直す。
 /// 非表示 view を増やさないことで、attach client / VT パース / スクロールバックの多重コストを避ける。
 /// NSObject 継承は LocalProcessTerminalViewDelegate が要求するため。
 @MainActor
 final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     static let shared = TerminalSessionManager()
 
-    /// 現在 attach 中の session 名。単一 attach なので最大 1。
+    /// 現在 attach 中の host。単一 attach なので最大 1。
+    private var currentHost: TmuxHost?
+    /// 現在 attach 中の session 名。
     private var currentSessionName: String?
     /// 現在 attach 中の terminal view。
     private var currentView: MouseReportingTerminalView?
-    /// attach済みclientの照会とsession切替に使うtmux CLIラッパ。
+    /// ローカルの attach 済み client の照会と session 切替に使う tmux CLI ラッパ。リモートは TmuxClient(host:) を都度作る。
     private let tmuxClient = TmuxClient()
     /// Ghostty config 由来の配色。起動時に一度読み、メニュー「テーマを再読み込み」で更新する。config が無ければ nil。
     private var theme = GhosttyTheme.load()
@@ -326,42 +210,113 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     /// 左ボタン押下時のセル座標。押下と同一セルで離した場合だけクリックとみなしリンクを開くための記録。
     private var mouseDownCell: (col: Int, row: Int)?
 
-    /// session に attach した terminal view を返す。別sessionなら同じclientをswitchして履歴を保持する。
-    /// client特定前などswitchできない場合だけ、従来どおりviewを作り直して表示自体は継続する。
-    func terminalView(for sessionName: String) -> LocalProcessTerminalView {
-        if currentSessionName == sessionName, let view = currentView {
+    /// host 上の session に attach した terminal view を返す。同一 host 内の別 session なら同じ client を switch して履歴を保持する。
+    /// host をまたぐ切替・client特定前などswitchできない場合は、viewを作り直して表示自体は継続する。
+    func terminalView(for host: TmuxHost, sessionName: String) -> LocalProcessTerminalView {
+        if currentHost == host, currentSessionName == sessionName, let view = currentView {
             return view
         }
-        if let view = currentView {
-            do {
-                try tmuxClient.switchClient(pid: view.process.shellPid, to: sessionName)
+        if let view = currentView, currentHost == host {
+            switch host {
+            case .local:
+                do {
+                    try tmuxClient.switchClient(pid: view.process.shellPid, to: sessionName)
+                    currentSessionName = sessionName
+                    fetchWindowGrid(host: host, sessionName: sessionName)
+                    return view
+                } catch {
+                    view.terminate()
+                    currentView = nil
+                    currentHost = nil
+                    currentSessionName = nil
+                }
+            case .remote:
+                // リモートの switch は ssh の同期実行になるため、View 更新中のこの経路では行わない
+                // (Process.waitUntilExit は runloop を回し、レイアウト中の再入でクラッシュし得る)。
+                // 切替済みとして扱って view を使い続け、switch-client は非同期で投げ、失敗した時だけ作り直す。
                 currentSessionName = sessionName
-                fetchWindowGrid(for: sessionName)
+                fetchWindowGrid(host: host, sessionName: sessionName)
+                switchRemoteClientAsynchronously(view: view, host: host, sessionName: sessionName)
                 return view
-            } catch {
-                view.terminate()
-                currentView = nil
-                currentSessionName = nil
             }
         }
-        let view = makeTerminalView(for: sessionName)
+        if let view = currentView {
+            // host をまたぐ切替。switch-client は同一 tmux サーバ内限定のため client を作り直す。
+            view.terminate()
+            currentView = nil
+            currentHost = nil
+            currentSessionName = nil
+        }
+        let view = makeTerminalView(host: host, sessionName: sessionName)
         currentView = view
+        currentHost = host
         currentSessionName = sessionName
         return view
     }
 
-    /// SwiftTermが起動したtmux clientのPID。まだattachしていなければnil。
+    /// リモート host 内の session 切替を非同期に行い、失敗したら attach を作り直して表示を回復する。
+    /// 成功時は tmux が同じ PTY に新 session を流すので view はそのまま使い続けられる。
+    private func switchRemoteClientAsynchronously(view: MouseReportingTerminalView, host: TmuxHost, sessionName: String) {
+        let client = TmuxClient(host: host)
+        Task { @MainActor in
+            let switchError = await Task.detached(priority: .userInitiated) { () -> Error? in
+                do {
+                    try client.switchRemoteClient(to: sessionName)
+                    return nil
+                } catch {
+                    return error
+                }
+            }.value
+            // 成功、または待っている間に別の切替が走った場合は何もしない。
+            guard switchError != nil,
+                  self.currentView === view,
+                  self.currentHost == host,
+                  self.currentSessionName == sessionName
+            else { return }
+            let container = view.superview
+            view.terminate()
+            view.removeFromSuperview()
+            self.currentView = nil
+            self.currentHost = nil
+            self.currentSessionName = nil
+            guard let container else { return }
+            let newView = self.makeTerminalView(host: host, sessionName: sessionName)
+            self.currentView = newView
+            self.currentHost = host
+            self.currentSessionName = sessionName
+            TerminalHostView.pin(newView, in: container)
+            self.focusTerminal()
+        }
+    }
+
+    /// SwiftTermが起動した子プロセス (ローカル: tmux client / リモート: ssh) のPID。まだattachしていなければnil。
     var attachedClientPID: Int32? {
         guard let view = currentView, view.process.running else { return nil }
         return view.process.shellPid
     }
 
+    /// attach 中 (子プロセス生存) の host。PID による client 追随はローカルのみ有効なため、その判定に使う。
+    var attachedHost: TmuxHost? {
+        guard let view = currentView, view.process.running else { return nil }
+        return currentHost
+    }
+
+    /// managerが最後に反映したhost。表示中 window の格子取得先の解決に使う。
+    var managedHost: TmuxHost? { currentHost }
+
     /// managerが最後に反映したsession名。AppStateの新しい選択がまだViewへ届いていない状態との判別に使う。
     var managedSessionName: String? { currentSessionName }
 
-    /// `prefix + L` 等でtmux内からsessionが変わった時、管理中のsession名を実態へ合わせる。
-    func synchronizeCurrentSessionName(_ sessionName: String) {
+    /// manager が最後に反映した session の複合 ID。
+    var managedSessionID: String? {
+        guard let currentHost, let currentSessionName else { return nil }
+        return TmuxID.make(hostID: currentHost.id, element: currentSessionName)
+    }
+
+    /// `prefix + L` 等でtmux内からsessionが変わった時、管理中のsessionを実態へ合わせる。
+    func synchronizeCurrentSession(host: TmuxHost, sessionName: String) {
         guard currentView != nil else { return }
+        currentHost = host
         currentSessionName = sessionName
     }
 
@@ -395,14 +350,20 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         view.terminate()
         view.removeFromSuperview()
         currentView = nil
+        currentHost = nil
         currentSessionName = nil
     }
 
-    /// session に attach する terminal view を 1 つ生成する。
+    /// host 上の session に attach する terminal view を 1 つ生成する。
+    /// attach コマンドの組み立て (ローカル: tmux / リモート: ssh -t + tty 記録) は TmuxClient.attachCommand に集約している。
     /// terminal view の生成箇所はこの 1 メソッドに集約している (後工程のテーマ適用の差し込み点)。
-    private func makeTerminalView(for sessionName: String) -> MouseReportingTerminalView {
+    private func makeTerminalView(host: TmuxHost, sessionName: String) -> MouseReportingTerminalView {
         installMouseMonitorIfNeeded()
         let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        // SwiftTerm d5ee56e で既定が .overlay に変わったが、cellSize() と TerminalFontFit の
+        // セル幅計算・font 変更後の再同期 (ADR 0010) は .legacy 固定 15pt の scroller 幅を前提に
+        // しているため、従来と同じ .legacy を明示する。
+        view.scrollerStyle = .legacy
         baseFont = view.font
         // 前の session の格子を引き継がず、取得完了までフィット無し (設定サイズのまま) で表示する。
         windowGrid = nil
@@ -411,17 +372,11 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         // .alwaysWithModifier では linkForClick が暗黙リンク (match.isExplicit == false) を常に nil 扱いにするので、
         // client と tmux window の桁数不一致で折返しが崩れた時に SwiftTerm が誤結合した URL を開く不具合を防げる (LinkHighlightMode に無効化 case が無いための代替)。
         view.linkHighlightMode = .alwaysWithModifier
-        // `=` プレフィックスで session 名の完全一致を強制 (前方一致による誤 attach を防ぐ)
-        // Noroshi の画面サイズで他 client の window を resize しないよう ignore-size で attach する。
-        view.startProcess(
-            executable: TmuxClient.resolveBinaryPath(),
-            args: TmuxClient.resolveBinaryPath().hasSuffix("env")
-                ? ["tmux", "attach-session", "-f", "ignore-size", "-t", "=\(sessionName)"]
-                : ["attach-session", "-f", "ignore-size", "-t", "=\(sessionName)"]
-        )
+        let attachCommand = TmuxClient(host: host).attachCommand(sessionName: sessionName)
+        view.startProcess(executable: attachCommand.executable, args: attachCommand.arguments)
         theme?.apply(to: view)
         applyFont(to: view)
-        fetchWindowGrid(for: sessionName)
+        fetchWindowGrid(host: host, sessionName: sessionName)
         return view
     }
 
@@ -465,13 +420,13 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     /// attach 中 session のカレント window の格子サイズを tmux から取り直し、届いたら再フィットする。
     /// tmux CLI (Process.waitUntilExit) は runloop を回すため、View 更新中に同期実行せず必ず非同期で行う。
     /// 取得中に別 session へ切り替わっていた場合は古い格子を適用しない。
-    private func fetchWindowGrid(for sessionName: String) {
-        let tmuxClient = self.tmuxClient
+    private func fetchWindowGrid(host: TmuxHost, sessionName: String) {
+        let client = TmuxClient(host: host)
         Task { @MainActor in
             let grid = await Task.detached(priority: .userInitiated) {
-                try? tmuxClient.windowGrid(session: sessionName)
+                try? client.windowGrid(session: sessionName)
             }.value
-            guard self.currentSessionName == sessionName else { return }
+            guard self.currentHost == host, self.currentSessionName == sessionName else { return }
             self.updateWindowGrid(grid)
         }
     }
@@ -496,6 +451,13 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         let font = fittedFont(preferred: preferred, in: view)
         if view.font.fontName != font.fontName || view.font.pointSize != font.pointSize {
             view.font = font
+            // SwiftTerm の font setter (resetFont) は terminal.softReset() でスクロール領域等を tmux に知らせず
+            // 全画面へ戻すため、格子が変わらない font 変更では SIGWINCH が発生せず tmux 側のスクロール領域
+            // キャッシュが実状態とずれたままになり、pane スクロールのたびに画面全体がせり上がって崩れる。
+            // resetFont は scroller 幅を引かずに cols を計算するので、同じ frame で setFrameSize を呼び直すと
+            // processSizeChange が scroller 幅を引いた必ず異なる cols へ再リサイズし、実サイズ変更 (SIGWINCH)
+            // として tmux の全キャッシュ破棄 (tty_invalidate) と全再描画を強制できる (ADR 0010)。
+            view.setFrameSize(view.frame.size)
         }
     }
 
@@ -606,14 +568,15 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// 検出済みリンクを開く。相対パスのときだけ表示中 session のアクティブ pane カレントパスを基準に解決し、存在するもののみ開く。
+    /// リモート session のパスはローカルに存在しないため自然に何も開かない (URL は host に依らず開く)。
     /// paneCurrentPath の tmux CLI 同期実行と fileExists は Process ブロッキングを伴うため Task.detached でメインスレッド外へ逃がし、
-    /// NSWorkspace.open だけ main で行う。MainActor 隔離の tmuxClient / currentSessionName は detached へ渡す前に取り出す。
+    /// NSWorkspace.open だけ main で行う。MainActor 隔離の currentHost / currentSessionName は detached へ渡す前に取り出す。
     private func open(_ link: TerminalLink) async {
         switch link {
         case .url(let url):
             NSWorkspace.shared.open(url)
         case .path(let path):
-            let tmuxClient = self.tmuxClient
+            let tmuxClient = TmuxClient(host: currentHost ?? .local)
             let sessionName = currentSessionName
             guard let resolved = await Task.detached(priority: .userInitiated, operation: { () -> String? in
                 guard let resolved = TerminalLinkDetector.resolvePath(
@@ -645,14 +608,17 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     func processTerminated(source: TerminalView, exitCode: Int32?) {
         if source === currentView {
             currentView = nil
+            currentHost = nil
             currentSessionName = nil
         }
     }
 }
 
 /// 選択中 session の terminal を表示する SwiftUI ラッパ。
-/// session 切り替え時は単一 attach 方式に従い、同じtmux clientの接続先を切り替える。
+/// session 切り替え時は単一 attach 方式に従い、同一 host 内なら同じtmux clientの接続先を切り替える。
 struct TerminalHostView: NSViewRepresentable {
+    /// 表示する tmux サーバ。
+    let host: TmuxHost
     /// 表示する tmux session 名。
     let sessionName: String
     /// 新規取り付け・session 切替時に terminal へフォーカスを移してよいか。
@@ -674,17 +640,23 @@ struct TerminalHostView: NSViewRepresentable {
         TerminalSessionManager.shared.detachTerminal(from: container)
     }
 
-    /// sessionName の terminal view をコンテナに取り付け、新規取り付け時またはsession切替時にフォーカスを当てる。
+    /// host/sessionName の terminal view をコンテナに取り付け、新規取り付け時またはsession切替時にフォーカスを当てる。
     private func install(on container: NSView) {
         let manager = TerminalSessionManager.shared
-        let didChangeSession = manager.managedSessionName != sessionName
-        let terminal = manager.terminalView(for: sessionName)
+        let didChangeSession = manager.managedSessionID != TmuxID.make(hostID: host.id, element: sessionName)
+        let terminal = manager.terminalView(for: host, sessionName: sessionName)
         // ポーリング由来の再描画ではフォーカスを奪わず、同じviewをswitch-clientした場合だけterminalへ戻す。
         guard terminal.superview !== container else {
             if didChangeSession, takesFocus { manager.focusTerminal() }
             return
         }
         container.subviews.forEach { $0.removeFromSuperview() }
+        Self.pin(terminal, in: container)
+        if takesFocus { manager.focusTerminal() }
+    }
+
+    /// terminal をコンテナ全面に固定して取り付ける。manager の切替失敗時の作り直しでも同じ取り付けを使う。
+    fileprivate static func pin(_ terminal: NSView, in container: NSView) {
         terminal.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(terminal)
         NSLayoutConstraint.activate([
@@ -693,6 +665,5 @@ struct TerminalHostView: NSViewRepresentable {
             terminal.topAnchor.constraint(equalTo: container.topAnchor),
             terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
-        if takesFocus { manager.focusTerminal() }
     }
 }
