@@ -34,6 +34,28 @@ else
   done
 fi
 
+# リモートホストで動いている場合 (issue #39): Noroshi が ssh -R で $HOME/.noroshi.sock を
+# Mac 側へフォワードしていれば、URL スキームの代わりにその socket へ 1 行書いて届ける。
+# socket が無い・書き込めない (Noroshi 未起動や ssh 切断中) 時は通知を取りこぼして正常終了する。
+sock="$HOME/.noroshi.sock"
+if [ -S "$sock" ]; then
+  payload="session=${session_enc}&window=${window}"
+  if command -v python3 >/dev/null 2>&1; then
+    NOROSHI_SOCK="$sock" NOROSHI_PAYLOAD="$payload" python3 - <<'PYEOF' 2>/dev/null && exit 0
+import os, socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(2)
+s.connect(os.environ["NOROSHI_SOCK"])
+s.sendall((os.environ["NOROSHI_PAYLOAD"] + "\n").encode())
+s.close()
+PYEOF
+  fi
+  if command -v nc >/dev/null 2>&1; then
+    printf '%s\n' "$payload" | nc -U -w 2 "$sock" 2>/dev/null && exit 0
+  fi
+  exit 0
+fi
+
 # -g: アプリをフォアグラウンド化せずに URL イベントを届ける (未起動なら背面で起動)
 open -g "noroshi://stop?session=${session_enc}&window=${window}" 2>/dev/null || true
 exit 0
