@@ -22,15 +22,22 @@ final class AppState: ObservableObject {
     /// 通知履歴の保持上限。超えた分は古いものから捨てる (メモリのみ)。
     static let notificationHistoryLimit = 1000
 
-    /// サイドバーへ追加した session と表示順を永続化する UserDefaults キー。
+    /// サイドバーの session 表示順を永続化する UserDefaults キー。
     /// 旧形式 (ローカル session 名のみ) の値も同じキーのまま複合 ID へ移行する。
     private static let sidebarSessionNamesDefaultsKey = "noroshi.sidebarSessionNames"
 
+    /// 「サイドバーから削除」で非表示にした session ID を永続化する UserDefaults キー (issue #47)。
+    private static let hiddenSessionIDsDefaultsKey = "noroshi.hiddenSessionIDs"
+
     /// tmux から取得した全 host の session 一覧 (ローカル → config の remote-host 順)。表示順は displaySessions が解決する。
     @Published private(set) var sessions: [TmuxSession] = []
-    /// ユーザーがサイドバーへ追加した session ID (表示順)。UserDefaults に永続化する。
-    /// 消えた session の ID も残し、同名 session が再作成されたら再表示する。
+    /// ユーザーが並べ替えたサイドバーの session 表示順。UserDefaults に永続化する。
+    /// ここに無い session も末尾へ自動表示する (issue #47)。消えた session の ID も残し、
+    /// 同名 session が再作成されたら同じ位置に表示する。
     @Published private(set) var sidebarSessionIDs: [String]
+    /// ユーザーが「サイドバーから削除」した session ID。UserDefaults に永続化する (issue #47)。
+    /// 消えた session の ID も残し、同名 session が再作成されても非表示のままにする。再表示は + メニューから行う。
+    @Published private(set) var hiddenSessionIDs: Set<String>
     /// TmuxWindow.id -> 未読数。Stop イベントで加算し、window を開いたらクリアする。
     @Published private(set) var badges: [String: Int] = [:]
     /// terminal 表示のタブ (issue #40)。常に 1 枚以上あり、選択状態はアクティブタブが持つ。
@@ -102,6 +109,7 @@ final class AppState: ObservableObject {
         // 旧形式 (ローカル session 名のみ) を複合 ID へ移行する。tmux の session 名は ":" を含まないため判別できる。
         self.sidebarSessionIDs = (defaults.stringArray(forKey: Self.sidebarSessionNamesDefaultsKey) ?? [])
             .map { $0.contains(":") ? $0 : TmuxID.make(hostID: TmuxHost.local.id, element: $0) }
+        self.hiddenSessionIDs = Set(defaults.stringArray(forKey: Self.hiddenSessionIDsDefaultsKey) ?? [])
     }
 
     /// host に応じた tmux CLI ラッパ。ローカルは注入された client をそのまま使う (テストのダミー binaryPath を保つため)。
@@ -120,9 +128,10 @@ final class AppState: ObservableObject {
     }
 
     /// サイドバー・cmd+数字・session 隣接移動が共通で使う表示順の session ID。
-    /// 追加済みの保存順から、現存していて表示できる session ID だけを解決する。
+    /// 保存順を先頭に、非表示を除く現存 session をすべて解決する (issue #47)。
     var displaySessionIDs: [String] {
-        NoroshiNavigation.displayedSessionIDs(savedOrder: sidebarSessionIDs, currentIDs: sessions.map(\.id))
+        NoroshiNavigation.displayedSessionIDs(
+            savedOrder: sidebarSessionIDs, currentIDs: sessions.map(\.id), hiddenIDs: hiddenSessionIDs)
     }
 
     /// 表示順に並べ替えた session。サイドバーはこれを列挙する。
@@ -131,10 +140,9 @@ final class AppState: ObservableObject {
         return displaySessionIDs.compactMap { sessionsByID[$0] }
     }
 
-    /// picker に並べる未追加の現存 session。一覧順 (ローカル → remote-host 順、各 host 内は tmux の一覧順) を保つ。
+    /// picker に並べる非表示中の現存 session。一覧順 (ローカル → remote-host 順、各 host 内は tmux の一覧順) を保つ。
     var availableSessions: [TmuxSession] {
-        let addedIDs = Set(sidebarSessionIDs)
-        return sessions.filter { !addedIDs.contains($0.id) }
+        sessions.filter { hiddenSessionIDs.contains($0.id) }
     }
 
     /// サイドバーが実際に列挙する session。表示順の displaySessions にフィルタ (テキスト + 通知) を適用する。
@@ -155,31 +163,34 @@ final class AppState: ObservableObject {
         var reordered = displaySessionIDs
         reordered.move(fromOffsets: source, toOffset: destination)
         // 消えていて現在は表示できない session ID を末尾に残し、復活時に選択状態を失わないようにする。
-        let hiddenIDs = sidebarSessionIDs.filter { !reordered.contains($0) }
-        saveSidebarSessionIDs(reordered + hiddenIDs)
+        let goneIDs = sidebarSessionIDs.filter { !reordered.contains($0) }
+        saveSidebarSessionIDs(reordered + goneIDs)
     }
 
-    /// picker で選んだ session をサイドバー末尾へ追加して保存する。追加済みなら何もしない (冪等)。
+    /// picker で選んだ非表示 session をサイドバーへ再表示する。表示中なら何もしない (冪等)。
     func addSessionToSidebar(_ sessionID: String) {
         guard sessions.contains(where: { $0.id == sessionID }),
-              !sidebarSessionIDs.contains(sessionID) else { return }
-        saveSidebarSessionIDs(sidebarSessionIDs + [sessionID])
+              hiddenSessionIDs.contains(sessionID) else { return }
+        saveHiddenSessionIDs(hiddenSessionIDs.subtracting([sessionID]))
         if selectedSessionID == nil {
             selectedSessionID = sessionID
             synchronizeSelectedWindow()
         }
     }
 
-    /// session をサイドバーから外して保存する。未追加なら何もしない (冪等)。
+    /// session をサイドバーから非表示にして保存する。非表示済みなら何もしない (冪等)。
+    /// 非表示中は Stop イベント (バッジ・通知) も受け付けない。
     func removeSessionFromSidebar(_ sessionID: String) {
-        let updated = sidebarSessionIDs.filter { $0 != sessionID }
-        guard updated != sidebarSessionIDs else { return }
+        guard !hiddenSessionIDs.contains(sessionID) else { return }
         if let removedSession = session(id: sessionID) {
             let removedWindowIDs = Set(removedSession.windows.map(\.id))
             badges = badges.filter { !removedWindowIDs.contains($0.key) }
             updateDockBadge()
         }
-        saveSidebarSessionIDs(updated)
+        saveHiddenSessionIDs(hiddenSessionIDs.union([sessionID]))
+        if sidebarSessionIDs.contains(sessionID) {
+            saveSidebarSessionIDs(sidebarSessionIDs.filter { $0 != sessionID })
+        }
         if selectedSessionID == sessionID {
             selectedSessionID = displaySessionIDs.first
             synchronizeSelectedWindow()
@@ -383,16 +394,16 @@ final class AppState: ObservableObject {
     // MARK: - Stop イベント
 
     /// Stop イベントの共通受け口 (URL スキーム / リモート socket)。
-    /// サイドバー追加済み session のイベントだけをバッジへ反映し、macOS 標準通知を配信する。
+    /// 非表示 (サイドバーから削除) 中の session を除いてバッジへ反映し、macOS 標準通知を配信する。
     func receiveStopEvent(_ event: StopEvent) {
-        guard sidebarSessionIDs.contains(event.sessionID) else { return }
+        guard !hiddenSessionIDs.contains(event.sessionID) else { return }
         apply(event: event)
         NotificationService.shared.deliver(event: event, window: window(id: event.windowKey))
     }
 
-    /// 追加済み session の Stop hook イベントだけを適用し、該当 window の未読数を 1 増やして履歴に記録する。
+    /// 非表示中の session を除いて Stop hook イベントを適用し、該当 window の未読数を 1 増やして履歴に記録する。
     func apply(event: StopEvent) {
-        guard sidebarSessionIDs.contains(event.sessionID) else { return }
+        guard !hiddenSessionIDs.contains(event.sessionID) else { return }
         badges[event.windowKey, default: 0] += 1
         notifications.append(NotificationRecord(windowID: event.windowKey, receivedAt: Date()))
         if notifications.count > Self.notificationHistoryLimit {
@@ -408,7 +419,7 @@ final class AppState: ObservableObject {
 
     /// macOS通知をタップした時に対象windowを開く。一覧に無ければ一度更新してから解決する。
     func open(event: StopEvent) {
-        guard sidebarSessionIDs.contains(event.sessionID) else { return }
+        guard !hiddenSessionIDs.contains(event.sessionID) else { return }
         Task {
             if let window = window(id: event.windowKey) {
                 open(window: window)
@@ -607,10 +618,16 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 追加済み session ID をメモリと UserDefaults へ同時に反映する。
+    /// 表示順の session ID をメモリと UserDefaults へ同時に反映する。
     private func saveSidebarSessionIDs(_ sessionIDs: [String]) {
         sidebarSessionIDs = sessionIDs
         defaults.set(sessionIDs, forKey: Self.sidebarSessionNamesDefaultsKey)
+    }
+
+    /// 非表示 session ID をメモリと UserDefaults へ同時に反映する。順序は不要なため保存時に整列して安定させる。
+    private func saveHiddenSessionIDs(_ sessionIDs: Set<String>) {
+        hiddenSessionIDs = sessionIDs
+        defaults.set(sessionIDs.sorted(), forKey: Self.hiddenSessionIDsDefaultsKey)
     }
 
     /// 現在選択中 session の active window を、サイドバーの選択表示へ同期する。
