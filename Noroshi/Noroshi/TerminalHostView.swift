@@ -76,6 +76,38 @@ final class MouseReportingTerminalView: LocalProcessTerminalView {
     /// 未確定文字を terminal のキャレット位置に表示する overlay。
     private var markedTextOverlay: NSTextField?
 
+    // MARK: - Drag & Drop
+
+    /// PNG などのファイルをドロップで Claude Code へシェアできるよう、file URL のドラッグを受け入れる (issue #41)。
+    /// SwiftTerm 本体はドラッグ受け入れ (registerForDraggedTypes / performDragOperation) を実装していないため、この subclass で登録する。
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        registerForDraggedTypes([.fileURL])
+    }
+
+    /// file URL を含むドラッグだけコピー操作として受け入れる。それ以外はデスクトップへ戻す既定挙動のまま。
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) ? .copy : []
+    }
+
+    /// ドロップされたファイルのパスをシェルエスケープして attach 先 pane のプロンプトへ挿入する。
+    /// 挿入のみで改行は送らない。送信内容の確認と実行タイミングをユーザーに委ねるため。
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        guard let urls = sender.draggingPasteboard.readObjects(
+            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+            !urls.isEmpty
+        else { return false }
+        send(txt: TerminalFileDrop.insertionText(paths: urls.map(\.path)))
+        // 続けてプロンプトを打てるよう、ドロップ完了後は terminal へフォーカスを移す。
+        TerminalSessionManager.shared.focusTerminal()
+        return true
+    }
+
     // MARK: - NSTextInputClient
 
     /// IME が確定文字を送る直前に未確定文字の overlay を片付ける。
@@ -342,6 +374,18 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
                 window.makeFirstResponder(view)
             }
         }
+    }
+
+    /// メニュー「画像・ファイルをシェア」(cmd+shift+i) から、選択したファイルのパスを表示中 terminal のプロンプトへ挿入する (issue #41)。
+    /// Drag & Drop と同じ挿入 (TerminalFileDrop) のキーボード操作版。terminal 未表示時とキャンセル時は何もしない (冪等)。
+    func presentFileSharePanel() {
+        guard let view = currentView else { return }
+        let panel = NSOpenPanel()
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
+        view.send(txt: TerminalFileDrop.insertionText(paths: panel.urls.map(\.path)))
+        focusTerminal()
     }
 
     /// 表示コンテナが破棄されたとき、そのコンテナ内の現行 terminal を終了して attach を手放す。
