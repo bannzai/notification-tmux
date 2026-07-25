@@ -127,6 +127,9 @@ final class AppState: ObservableObject {
         selectedSessionID.flatMap { session(id: $0) }
     }
 
+    /// 表示中のアクティブタブ。session 未選択時に表示する素のターミナル (issue #54) のタブ識別に View から使う。
+    var activeTab: TerminalTab { tabs[activeTabIndex] }
+
     /// サイドバー・cmd+数字・session 隣接移動が共通で使う表示順の session ID。
     /// 保存順を先頭に、非表示を除く現存 session をすべて解決する (issue #47)。
     var displaySessionIDs: [String] {
@@ -252,11 +255,26 @@ final class AppState: ObservableObject {
     }
 
     /// index のタブを閉じる。最後の 1 枚は閉じない (ウィンドウを閉じる操作に委ねる)。
+    /// タブが保持していた素のターミナルのシェルもここで終了する (issue #54)。
     func closeTab(at index: Int) {
         guard tabs.count > 1, tabs.indices.contains(index) else { return }
+        PlainTerminalManager.shared.closeTerminal(for: tabs[index].id)
         tabs.remove(at: index)
         activeTabIndex = NoroshiNavigation.activeTabIndexAfterClosing(
             at: index, activeIndex: activeTabIndex, remainingCount: tabs.count)
+    }
+
+    /// 素のターミナルのシェルが自分で終了した (exit 等) タブの後始末 (issue #54)。Terminal.app と同様にタブを閉じ、
+    /// 最後の 1 枚は新しい空タブへ置き換えて新しいシェルを開き直す。
+    func handlePlainTerminalExit(tabID: UUID) {
+        switch NoroshiNavigation.plainTerminalExitAction(tabs: tabs, tabID: tabID) {
+        case .close(let index):
+            closeTab(at: index)
+        case .replace(let index):
+            tabs[index] = TerminalTab(id: UUID(), sessionID: nil, windowID: nil)
+        case .ignore:
+            break
+        }
     }
 
     // MARK: - ポーリング

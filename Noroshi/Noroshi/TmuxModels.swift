@@ -338,4 +338,21 @@ enum NoroshiNavigation {
     static func activeTabIndexAfterClosing(at closedIndex: Int, activeIndex: Int, remainingCount: Int) -> Int {
         closedIndex < activeIndex ? activeIndex - 1 : min(activeIndex, remainingCount - 1)
     }
+
+    /// 素のターミナルのシェル終了時にタブへ行う後始末 (issue #54)。
+    enum PlainTerminalExitAction: Equatable {
+        /// タブを閉じる。
+        case close(index: Int)
+        /// 最後の 1 枚は閉じられないため、新しい空タブ (新しいシェル) へ置き換える。
+        case replace(index: Int)
+        /// 何もしない。
+        case ignore
+    }
+
+    /// シェルが終了したタブの扱いを決める。Terminal.app と同様にタブを閉じる。
+    /// session 表示中のタブ (シェルだけがバックグラウンドで終了した) と既に閉じられたタブは何もしない。
+    static func plainTerminalExitAction(tabs: [TerminalTab], tabID: UUID) -> PlainTerminalExitAction {
+        guard let index = tabs.firstIndex(where: { $0.id == tabID }), tabs[index].sessionID == nil else { return .ignore }
+        return tabs.count > 1 ? .close(index: index) : .replace(index: index)
+    }
 }

@@ -25,27 +25,22 @@ struct ContentView: View {
         }
         .onChange(of: appState.focusRequest) { _, request in
             guard request?.target == .terminal else { return }
-            TerminalSessionManager.shared.focusTerminal()
+            if appState.selectedSession != nil {
+                TerminalSessionManager.shared.focusTerminal()
+            } else {
+                PlainTerminalManager.shared.focusTerminal(for: appState.activeTab.id)
+            }
         }
     }
 
-    /// アクティブタブの中身。session 選択済みなら terminal、未選択・消滅時は案内を表示する。
+    /// アクティブタブの中身。session 選択済みなら tmux の terminal、未選択・消滅時は案内表示ではなく
+    /// 素のターミナル (ログインシェル) を開く (issue #54)。ssh 越しの tmux 起動などをアプリ内で行えるようにする。
     @ViewBuilder
     private var detailContent: some View {
         if let session = appState.selectedSession {
             TerminalHostView(host: session.host, sessionName: session.name, takesFocus: !appState.isSidebarFocused)
-        } else if !appState.sessions.isEmpty {
-            ContentUnavailableView(
-                "session を選択してください",
-                systemImage: "sidebar.left",
-                description: Text("サイドバーの session を選ぶか、下部の＋で表示する tmux session を追加できます")
-            )
         } else {
-            ContentUnavailableView(
-                "tmux session がありません",
-                systemImage: "terminal",
-                description: Text(appState.lastError ?? "tmux server が起動していないか、session が 0 個です")
-            )
+            PlainTerminalHostView(tabID: appState.activeTab.id, takesFocus: !appState.isSidebarFocused)
         }
     }
 }

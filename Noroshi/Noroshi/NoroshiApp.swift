@@ -16,6 +16,9 @@ struct NoroshiApp: App {
         NotificationService.shared.configure { [weak appState] event in
             appState?.open(event: event)
         }
+        PlainTerminalManager.shared.configure { [weak appState] tabID in
+            appState?.handlePlainTerminalExit(tabID: tabID)
+        }
     }
 
     /// TEST_HOST としてユニットテストから起動されたかどうか。
@@ -146,8 +149,11 @@ struct NavigationCommands: Commands {
 
             Divider()
 
-            Button("テーマを再読み込み") { TerminalSessionManager.shared.reloadTheme() }
-                .keyboardShortcut("r", modifiers: [.command, .shift])
+            Button("テーマを再読み込み") {
+                TerminalSessionManager.shared.reloadTheme()
+                PlainTerminalManager.shared.reloadTheme()
+            }
+            .keyboardShortcut("r", modifiers: [.command, .shift])
         }
     }
 }
