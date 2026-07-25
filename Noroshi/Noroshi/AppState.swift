@@ -531,31 +531,12 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// 表示中 session のカレント window を次 (+1) / 前 (-1) に移す (cmd+shift+] / cmd+shift+[)。
-    /// 移動後、新しいアクティブ window のバッジをクリアして一覧を更新する。
+    /// 表示順の全 session の window を平坦化した並びで、offset (次: +1 / 前: -1) 隣の window へ循環で移す
+    /// (cmd+shift+] / cmd+shift+[)。session の端では隣の session の window へ跨ぐ (issue #52)。
     func moveWindow(_ offset: Int) {
-        guard let session = selectedSession else { return }
-        setSessionExpanded(session.id, isExpanded: true)
-        let client = self.client(for: session.host)
-        let sessionName = session.name
-        let hostID = session.host.id
-        Task.detached(priority: .userInitiated) {
-            do {
-                if offset >= 0 {
-                    try client.nextWindow(session: sessionName)
-                } else {
-                    try client.previousWindow(session: sessionName)
-                }
-                let windowID = TmuxID.make(hostID: hostID, element: try client.activeWindowID(session: sessionName))
-                await MainActor.run {
-                    self.selectedWindowID = windowID
-                    self.clearBadge(windowID: windowID)
-                }
-                await self.refresh()
-            } catch {
-                await MainActor.run { self.lastError = "\(error)" }
-            }
-        }
+        guard let window = NoroshiNavigation.adjacentWindow(
+            in: displaySessions, from: selectedWindowID, offset: offset) else { return }
+        open(window: window)
     }
 
     /// 表示中 session のカレント window 内で、アクティブ pane を次 (+1) / 前 (-1) に移す (cmd+] / cmd+[)。

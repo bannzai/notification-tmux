@@ -475,6 +475,30 @@ final class TmuxModelsTests: XCTestCase {
         XCTAssertNil(NoroshiNavigation.adjacentSessionID(in: [], from: "local:A", offset: 1))
     }
 
+    func testAdjacentWindowCrossesSessions() {
+        let windowA1 = TmuxWindow(host: .local, windowID: "@1", sessionName: "A", index: 0, name: "a1", isActive: true, paneCount: 1)
+        let windowA2 = TmuxWindow(host: .local, windowID: "@2", sessionName: "A", index: 1, name: "a2", isActive: false, paneCount: 1)
+        let windowB1 = TmuxWindow(host: .remote("dev"), windowID: "@1", sessionName: "B", index: 0, name: "b1", isActive: true, paneCount: 1)
+        let sessions = [
+            TmuxSession(host: .local, name: "A", attachedClients: 0, windows: [windowA1, windowA2]),
+            TmuxSession(host: .remote("dev"), name: "B", attachedClients: 0, windows: [windowB1]),
+        ]
+
+        // session 内の隣へ移動する
+        XCTAssertEqual(NoroshiNavigation.adjacentWindow(in: sessions, from: windowA1.id, offset: 1), windowA2)
+        // session の端では隣の session の window へ跨ぐ (host をまたいでも連続する; issue #52)
+        XCTAssertEqual(NoroshiNavigation.adjacentWindow(in: sessions, from: windowA2.id, offset: 1), windowB1)
+        XCTAssertEqual(NoroshiNavigation.adjacentWindow(in: sessions, from: windowB1.id, offset: -1), windowA2)
+        // 全体の末尾↔先頭で循環する
+        XCTAssertEqual(NoroshiNavigation.adjacentWindow(in: sessions, from: windowB1.id, offset: 1), windowA1)
+        XCTAssertEqual(NoroshiNavigation.adjacentWindow(in: sessions, from: windowA1.id, offset: -1), windowB1)
+        // 起点が nil / 一覧に無い場合は先頭 window へ
+        XCTAssertEqual(NoroshiNavigation.adjacentWindow(in: sessions, from: nil, offset: 1), windowA1)
+        XCTAssertEqual(NoroshiNavigation.adjacentWindow(in: sessions, from: "missing", offset: 1), windowA1)
+        // window が無ければ nil
+        XCTAssertNil(NoroshiNavigation.adjacentWindow(in: [], from: windowA1.id, offset: 1))
+    }
+
     func testAttachedSessionFollowDistinguishesTmuxSwitchFromPendingAppSelection() {
         let available: Set<String> = ["local:A", "local:B"]
         // appとmanagerがBで一致し、clientだけAへ変わった = prefix+L等のtmux内操作。
