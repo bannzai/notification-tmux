@@ -57,137 +57,18 @@ enum TerminalFontResolver {
     }
 }
 
-/// tmux のようにマウスレポートを有効化した相手へ、SwiftTerm 1.13.0 が取りこぼす
-/// ホイールスクロールと buttonEventTracking (DECSET 1002) のドラッグ motion を SGR レポートとして送出する
-/// terminal view。SwiftTerm 本体 (checkouts) は改変不可で、かつ TerminalView の
+/// tmux のようにマウスレポートを有効化した相手へ、ホイールスクロールと
+/// buttonEventTracking (DECSET 1002) のドラッグ motion を SGR レポートとして送出する terminal view。
+/// SwiftTerm 1.13.0 はこれらのレポートを view 自身が送らず、かつ TerminalView の
 /// scrollWheel / mouseDragged は `public`(非 `open`) override のため別モジュールから再 override できない。
-/// そのため TerminalSessionManager 側の NSEvent local monitor から本 view の public メソッドを呼んで補う。
-///
-/// SwiftTerm 1.13.0 の取りこぼし箇所 (Mac/MacTerminalView.swift):
-/// - scrollWheel はマウスモードを一切見ずに常にローカルスクロールバックを操作し、レポートを送らない。
-///   tmux 側にホイールが届かず copy-mode スクロールが起きない。
-/// - mouseDragged は `mouseMode.sendMotionEvent()` (anyEvent=1003 のみ true) が偽だと早期 return し、
-///   buttonEventTracking (1002) のドラッグ motion を送らない。tmux の pane 境界ドラッグ (resize) が効かない。
+/// そのため TerminalSessionManager 側の NSEvent local monitor でイベントを view より先に消費し、
+/// 本 view の public メソッドを呼んで送出する (ADR 0003)。
+/// 現在 pin している SwiftTerm (d5ee56e, ADR 0011) は upstream 側でも同種のレポートを実装したが、
+/// monitor が先にイベントを消費するため二重送出にはならず、リンククリック検出 (ADR 0006) と
+/// 一体のこの経路を維持している。
 final class MouseReportingTerminalView: LocalProcessTerminalView {
     /// 精密スクロール (トラックパッド) の端数を貯め、セル高ごとに 1 tick へ量子化するための累積値。
     private var scrollAccumulator: CGFloat = 0
-    /// IME が変換中の未確定文字。SwiftTerm 1.13.0 では macOS 側の marked text 描画が未実装なためここで保持する。
-    private var markedTextStorage: NSAttributedString?
-    /// 未確定文字を terminal のキャレット位置に表示する overlay。
-    private var markedTextOverlay: NSTextField?
-
-    // MARK: - NSTextInputClient
-
-    /// IME が確定文字を送る直前に未確定文字の overlay を片付ける。
-    override func insertText(_ string: Any, replacementRange: NSRange) {
-        clearMarkedText()
-        super.insertText(string, replacementRange: replacementRange)
-    }
-
-    /// IME の未確定文字を更新し、terminal には送らずキャレット上に preview する。
-    override func setMarkedText(_ string: Any, selectedRange: NSRange, replacementRange: NSRange) {
-        switch string {
-        case let attributed as NSAttributedString:
-            markedTextStorage = attributed.length > 0 ? attributed : nil
-        case let nsString as NSString:
-            markedTextStorage = nsString.length > 0 ? NSAttributedString(string: nsString as String) : nil
-        case let plain as String:
-            markedTextStorage = plain.isEmpty ? nil : NSAttributedString(string: plain)
-        default:
-            markedTextStorage = nil
-        }
-        super.setMarkedText(string, selectedRange: selectedRange, replacementRange: replacementRange)
-        updateMarkedTextOverlay()
-    }
-
-    /// IME が変換を終了したら overlay を確実に外し、削除済み文字の残像を残さない。
-    override func unmarkText() {
-        clearMarkedText()
-        super.unmarkText()
-    }
-
-    /// 選択範囲がないときも IME が入力位置を特定できるよう、現在の cursor 位置を返す。
-    override func selectedRange() -> NSRange {
-        let selection = super.selectedRange()
-        guard selection.location == NSNotFound else { return selection }
-        let terminal = getTerminal()
-        return NSRange(location: terminal.buffer.y * terminal.cols + terminal.buffer.x, length: 0)
-    }
-
-    override func markedRange() -> NSRange {
-        guard let markedTextStorage else {
-            return NSRange(location: NSNotFound, length: 0)
-        }
-        return NSRange(location: 0, length: markedTextStorage.length)
-    }
-
-    override func hasMarkedText() -> Bool {
-        markedTextStorage != nil
-    }
-
-    override func attributedSubstring(
-        forProposedRange range: NSRange,
-        actualRange: NSRangePointer?
-    ) -> NSAttributedString? {
-        guard let markedTextStorage,
-              range.location != NSNotFound,
-              range.location < markedTextStorage.length
-        else { return nil }
-        let clampedRange = NSRange(
-            location: range.location,
-            length: min(range.length, markedTextStorage.length - range.location)
-        )
-        guard clampedRange.length > 0 else { return nil }
-        actualRange?.pointee = clampedRange
-        return markedTextStorage.attributedSubstring(from: clampedRange)
-    }
-
-    override func validAttributesForMarkedText() -> [NSAttributedString.Key] {
-        [.underlineStyle, .markedClauseSegment, .glyphInfo]
-    }
-
-    /// 未確定文字の内容と長さに合わせて overlay を更新する。空なら再描画のため view 階層から取り除く。
-    private func updateMarkedTextOverlay() {
-        guard let markedTextStorage, markedTextStorage.length > 0 else {
-            markedTextOverlay?.removeFromSuperview()
-            markedTextOverlay = nil
-            return
-        }
-
-        let overlay: NSTextField
-        if let markedTextOverlay {
-            overlay = markedTextOverlay
-        } else {
-            overlay = NSTextField(labelWithString: "")
-            overlay.isBezeled = false
-            overlay.isEditable = false
-            overlay.drawsBackground = true
-            overlay.wantsLayer = true
-            overlay.layer?.cornerRadius = 3
-            addSubview(overlay, positioned: .above, relativeTo: nil)
-            markedTextOverlay = overlay
-        }
-
-        overlay.backgroundColor = nativeBackgroundColor.withAlphaComponent(0.9)
-        let displayString = NSMutableAttributedString(attributedString: markedTextStorage)
-        displayString.addAttributes([
-            .font: font,
-            .foregroundColor: nativeForegroundColor,
-            .underlineStyle: NSUnderlineStyle.single.rawValue,
-        ], range: NSRange(location: 0, length: displayString.length))
-        overlay.attributedStringValue = displayString
-        overlay.sizeToFit()
-        overlay.frame.origin = caretFrame.origin
-        if overlay.frame.maxX > bounds.maxX {
-            overlay.frame.origin.x = max(0, bounds.maxX - overlay.frame.width)
-        }
-    }
-
-    /// 呼び出しを重ねても同じ空状態に収束する後始末。
-    private func clearMarkedText() {
-        markedTextStorage = nil
-        updateMarkedTextOverlay()
-    }
 
     /// attach 先がマウスレポート (DECSET 1000/1002/1003) を要求している状態か。
     /// false のときはローカルスクロールバックへ委ねるべきで、ホイールレポートは送らない。
@@ -435,6 +316,10 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     private func makeTerminalView(host: TmuxHost, sessionName: String) -> MouseReportingTerminalView {
         installMouseMonitorIfNeeded()
         let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        // SwiftTerm d5ee56e で既定が .overlay に変わったが、cellSize() と TerminalFontFit の
+        // セル幅計算・font 変更後の再同期 (ADR 0010) は .legacy 固定 15pt の scroller 幅を前提に
+        // しているため、従来と同じ .legacy を明示する。
+        view.scrollerStyle = .legacy
         baseFont = view.font
         // 前の session の格子を引き継がず、取得完了までフィット無し (設定サイズのまま) で表示する。
         windowGrid = nil
