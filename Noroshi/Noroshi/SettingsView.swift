@@ -201,6 +201,7 @@ final class SettingsModel: ObservableObject {
         do {
             try NoroshiConfig.writeConfigText(configText)
             TerminalSessionManager.shared.reloadTheme()
+            PlainTerminalManager.shared.reloadTheme()
         } catch {
             // 書き込み失敗は致命的ではない (次回操作で再試行される)。ログのみ残す。
             NSLog("noroshi: 設定の書き込みに失敗: \(error)")
