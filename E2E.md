@@ -14,6 +14,8 @@ tmux list-windows -t noroshi-e2e -F '#{session_name} #{window_id} #{window_name}
 
 出力から session 名と window ID (`@数字`) を控える。
 
+常用の /Applications/Noroshi.app が起動している場合は終了してから `make run` する。他セッションの Claude Code Stop hook が `open -g "noroshi://..."` を実行すると /Applications 側が随時自動で再起動するため、同名プロセスが 2 つになり、キーストロークやメニュー操作が意図しない側のアプリへ誤配送される (「新規 session」ピッカーにパス入力が渡り tmux session が誤作成された実例あり)。UI 操作の前に `pgrep -x Noroshi` で対象のビルドだけが起動していることを確認する。
+
 ## 実行手順
 
 1. `make run` を実行してビルドし、Noroshi.app を起動する。
