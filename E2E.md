@@ -51,6 +51,13 @@ worktree が分かれていても、Agent 間で macOS の GUI セッション�
 - E2E とスクリーンショットは同じ GUI セッションで同時に実行しない。
 - 可能なら Agent ごとに専用 tmux session と専用 macOS ユーザーセッションを使う。
 - `screencapture -l` を使う場合も、対象ウィンドウが最小化・非表示になっていないことを確認する。
+- 最前面の取り合いを避けるには、対象 Noroshi の pid から CGWindowID を取得し、`screencapture -l <CGWindowID> -x` でウィンドウを直接撮影する (最前面でなくても撮影できる)。
+
+  ```sh
+  swift -e 'import CoreGraphics; let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]; for w in info where (w["kCGWindowOwnerPID"] as? Int) == <pid> && (w["kCGWindowLayer"] as? Int) == 0 { print(w["kCGWindowNumber"] ?? "") }'
+  ```
+
+- 別 Agent の tmux 操作 (switch-client 等) で対象 client の接続先が変わることがある。撮影の直前・直後に `tmux list-clients -F '#{client_pid} #{client_session}'` で attach 先が想定 session のままかを確認し、変わっていたら戻して撮り直す。
 
 ## PR / Issue へのスクリーンショット添付
 
