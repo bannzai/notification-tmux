@@ -83,6 +83,25 @@ final class TerminalHostViewTests: XCTestCase {
             end: Position(col: terminal.cols, row: terminal.buffer.yDisp + 1)).contains("\n"))
     }
 
+    /// SwiftTerm の font setter (resetFont) は scroller 幅を引かずに cols を計算し、同じ frame での setFrameSize は
+    /// processSizeChange が scroller 幅を引いた必ず小さい cols へ再リサイズする前提の確認。applyFont はこの差分で
+    /// 実サイズ変更 (SIGWINCH) を起こし、font setter の softReset で tmux とずれたスクロール領域を全再描画で
+    /// 再同期させる (ADR 0010)。この差分が無くなると同一格子の font 変更で tmux が再同期されず画面が崩れる。
+    func testSetFrameSizeAfterFontChangeShrinksColsByScrollerWidth() {
+        let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+        view.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .regular)
+        let cell = TerminalFontFit.cellSize(
+            of: view.font, scale: view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1)
+        XCTAssertEqual(view.getTerminal().cols, Int(800 / cell.width))
+
+        view.setFrameSize(view.frame.size)
+
+        XCTAssertEqual(
+            view.getTerminal().cols,
+            Int((800 - NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy)) / cell.width))
+        XCTAssertLessThan(view.getTerminal().cols, Int(800 / cell.width))
+    }
+
     /// ハード改行 (\r\n) 境界は getText で "\n" を挟む。桁数不一致でクリップ描画された非折返し行が結合されない根拠。
     func testHardNewlineBoundaryHasNewlineInGetText() {
         let view = MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
