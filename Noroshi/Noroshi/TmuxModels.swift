@@ -309,6 +309,18 @@ enum NoroshiNavigation {
         return sessionIDs[((currentIndex + offset) % count + count) % count]
     }
 
+    /// 表示順 sessions の全 window を平坦化した並びで、current から offset だけ移動した window を返す (末尾↔先頭で循環)。
+    /// session の端では隣の session の window へ跨いで移動する (issue #52)。
+    /// current が nil または一覧に無い場合は先頭 window を返す。
+    static func adjacentWindow(in sessions: [TmuxSession], from currentWindowID: String?, offset: Int) -> TmuxWindow? {
+        let windows = sessions.flatMap(\.windows)
+        guard !windows.isEmpty else { return nil }
+        guard let currentWindowID,
+              let currentIndex = windows.firstIndex(where: { $0.id == currentWindowID }) else { return windows.first }
+        let count = windows.count
+        return windows[((currentIndex + offset) % count + count) % count]
+    }
+
     /// 表示順 sessionIDs の displayIndex 番目 (0 始まり) の session ID。範囲外は nil。
     static func sessionID(in sessionIDs: [String], atDisplayIndex displayIndex: Int) -> String? {
         sessionIDs.indices.contains(displayIndex) ? sessionIDs[displayIndex] : nil

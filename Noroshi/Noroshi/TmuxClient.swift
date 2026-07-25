@@ -252,30 +252,14 @@ struct TmuxClient {
         return sessionID
     }
 
-    /// session のカレント window を次の window に切り替える (末尾↔先頭で循環; tmux ネイティブ挙動)。
-    func nextWindow(session: String) throws {
-        try run(["next-window", "-t", "=\(session)"])
-    }
-
-    /// session のカレント window を前の window に切り替える (先頭↔末尾で循環; tmux ネイティブ挙動)。
-    func previousWindow(session: String) throws {
-        try run(["previous-window", "-t", "=\(session)"])
-    }
-
     /// session のカレント window 内で、アクティブ pane を次 (offset >= 0) / 前 (offset < 0) の pane に移す (循環)。
     /// pane index トークン `.+` / `.-` を使う (man tmux TARGET SYNTAX)。
     func selectPane(session: String, offset: Int) throws {
         try run(["select-pane", "-t", "=\(session):.\(offset >= 0 ? "+" : "-")"])
     }
 
-    /// session のカレント window の window_id (@n) を返す。移動後のバッジクリア対象の特定に使う。
-    func activeWindowID(session: String) throws -> String {
-        try run(["display-message", "-p", "-t", "=\(session):", "#{window_id}"])
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
     /// session のカレント window の格子サイズ (列 × 行) を返す。表示フォントのフィット計算 (issue #36) に使う。
-    /// target は activeWindowID と同じ colon 付き `=session:` 形式で session のカレント window を指す。
+    /// target は colon 付き `=session:` 形式で session のカレント window を指す。
     func windowGrid(session: String) throws -> TmuxWindowGrid? {
         TmuxFormat.parseWindowGridLine(
             try run(["display-message", "-p", "-t", "=\(session):", TmuxFormat.windowGridFormat])
@@ -283,7 +267,7 @@ struct TmuxClient {
     }
 
     /// session のアクティブ pane のカレントディレクトリを返す。クリックされた相対パスの解決基準に使う。
-    /// target は activeWindowID と同じ colon 付き `=session:` 形式にする。colon 無し `=session` は
+    /// target は windowGrid と同じ colon 付き `=session:` 形式にする。colon 無し `=session` は
     /// tmux 3.2a で pane 変数 `#{pane_current_path}` に空文字を返し、相対パス解決が全滅するため。
     func paneCurrentPath(session: String) throws -> String {
         try run(["display-message", "-p", "-t", "=\(session):", "#{pane_current_path}"])
