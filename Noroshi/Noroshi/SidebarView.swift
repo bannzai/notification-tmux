@@ -101,21 +101,12 @@ struct SidebarView: View {
             focusedItem = appState.selectedSessionID.map(FocusedItem.session)
                 ?? appState.displaySessionIDs.first.map(FocusedItem.session)
         }
-        // ↑↓ (moveSidebarSelection) や Tab で移ったフォーカスを選択へ反映し、
-        // ハイライトと terminal 表示をフォーカス行へ追従させる (issue #30)。
+        // フォーカスの所在だけを追跡し、フォーカス変化そのものでは選択 (= attach) を変えない (issue #57):
+        // cmd+opt+s のサイドバーフォーカスや Full Keyboard Access の Tab 移動・システムのフォーカス再割り当てが
+        // session 未選択のタブ (起動直後・新規タブ) に先頭 session を勝手に attach してしまうため。
+        // ↑↓ ナビゲーションの選択追従 (issue #30) は moveSidebarSelection が明示的に行う。
         .onChange(of: focusedItem) { _, item in
             appState.isSidebarFocused = item != nil
-            switch item {
-            case .session(let sessionID):
-                guard sessionID != appState.selectedSessionID else { return }
-                appState.selectSession(id: sessionID)
-            case .window(let windowID):
-                guard windowID != appState.selectedWindowID,
-                      let window = appState.window(id: windowID) else { return }
-                appState.open(window: window)
-            case .filter, nil:
-                break
-            }
         }
     }
 
@@ -190,7 +181,8 @@ struct SidebarView: View {
         }
     }
 
-    /// ↑↓ でフォーカスを表示順の隣の行へ移す。選択への反映は focusedItem の onChange が行う。
+    /// ↑↓ でフォーカスを表示順の隣の行へ移し、選択と terminal 表示を移動先へ追従させる (issue #30)。
+    /// フォーカス変化そのものは選択を変えないため (issue #57)、ユーザーの明示操作であるここで選択する。
     /// フィルタ入力中は入力操作を妨げないよう処理しない。
     private func moveSidebarSelection(_ offset: Int) -> KeyPress.Result {
         guard focusedItem != .filter else { return .ignored }
@@ -200,8 +192,16 @@ struct SidebarView: View {
             from: currentSidebarRow,
             offset: offset)
         {
-        case .session(let sessionID): focusedItem = .session(sessionID)
-        case .window(let window): focusedItem = .window(window.id)
+        case .session(let sessionID):
+            focusedItem = .session(sessionID)
+            if sessionID != appState.selectedSessionID {
+                appState.selectSession(id: sessionID)
+            }
+        case .window(let window):
+            focusedItem = .window(window.id)
+            if window.id != appState.selectedWindowID {
+                appState.open(window: window)
+            }
         case nil: return .ignored
         }
         return .handled
