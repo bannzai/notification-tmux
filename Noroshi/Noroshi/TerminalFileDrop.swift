@@ -11,9 +11,15 @@ enum TerminalFileDrop {
     /// パス群をシェルエスケープして空白区切りで連結した挿入テキストを返す。
     /// 末尾にスペースを 1 つ付けるのは、続けてプロンプトを打てるようにし、
     /// 連続ドロップでパス同士が結合しないようにするため (iTerm2 のファイルドロップと同じ挙動)。
+    /// 制御文字 (Unicode Cc) を含むパスは挿入対象から除外する。macOS のファイル名には制御文字が使え、
+    /// 挿入テキストは PTY の行エディタがシェルのクオート解釈より先に制御バイトとして解釈するため、
+    /// Ctrl-U + コマンド + 改行のようなファイル名がプロンプト消去やコマンド実行になるのをクオートでは防げない。
     static func insertionText(paths: [String]) -> String {
-        guard !paths.isEmpty else { return "" }
-        return paths.map(escape).joined(separator: " ") + " "
+        let insertablePaths = paths.filter { path in
+            !path.unicodeScalars.contains { $0.properties.generalCategory == .control }
+        }
+        guard !insertablePaths.isEmpty else { return "" }
+        return insertablePaths.map(escape).joined(separator: " ") + " "
     }
 
     /// シェルとして安全な文字だけなら素通しし、それ以外を含むパスは単一引用符で包む。

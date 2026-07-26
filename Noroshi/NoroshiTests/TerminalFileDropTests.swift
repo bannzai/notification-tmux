@@ -30,4 +30,16 @@ final class TerminalFileDropTests: XCTestCase {
     func testEmptyPathsProduceEmptyText() {
         XCTAssertEqual(TerminalFileDrop.insertionText(paths: []), "")
     }
+
+    /// 制御バイトは PTY の行エディタがシェルのクオート解釈より先に解釈するため、
+    /// Ctrl-U + コマンド + 改行のようなファイル名がコマンド実行にならないよう除外される。
+    func testPathContainingControlCharactersIsExcluded() {
+        XCTAssertEqual(TerminalFileDrop.insertionText(paths: ["/tmp/\u{15}rm -rf ~\u{0A}.png"]), "")
+    }
+
+    func testControlCharacterPathIsExcludedWhileSafePathsAreKept() {
+        XCTAssertEqual(
+            TerminalFileDrop.insertionText(paths: ["/a.png", "/tmp/bad\u{1B}].png", "/b.png"]),
+            "/a.png /b.png ")
+    }
 }
