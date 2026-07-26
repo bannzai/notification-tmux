@@ -112,6 +112,14 @@ final class TerminalHostViewTests: XCTestCase {
             end: Position(col: terminal.cols, row: terminal.buffer.yDisp + 1)).contains("\n"))
     }
 
+    /// ファイルドロップを受け入れる前提となる dragged type 登録の確認 (issue #41)。
+    /// SwiftTerm 本体は登録しないため、subclass の init で file URL が登録されていることを検証する。
+    func testFileURLDraggedTypeIsRegistered() {
+        XCTAssertTrue(
+            MouseReportingTerminalView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
+                .registeredDraggedTypes.contains(.fileURL))
+    }
+
     private var noRange: NSRange {
         NSRange(location: NSNotFound, length: 0)
     }
