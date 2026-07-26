@@ -114,15 +114,31 @@ final class TmuxModelsTests: XCTestCase {
     }
 
     func testParseWindowGridLine() {
-        XCTAssertEqual(TmuxFormat.parseWindowGridLine("209\u{1f}60"), TmuxWindowGrid(cols: 209, rows: 60))
+        XCTAssertEqual(
+            TmuxFormat.parseWindowGridLine("209\u{1f}60\u{1f}on"),
+            TmuxWindowGrid(cols: 209, rows: 60, statusRows: 1))
+        XCTAssertEqual(
+            TmuxFormat.parseWindowGridLine("209\u{1f}60\u{1f}off"),
+            TmuxWindowGrid(cols: 209, rows: 60, statusRows: 0))
+        XCTAssertEqual(
+            TmuxFormat.parseWindowGridLine("209\u{1f}60\u{1f}2"),
+            TmuxWindowGrid(cols: 209, rows: 60, statusRows: 2))
+        XCTAssertEqual(
+            TmuxFormat.parseWindowGridLine("209\u{1f}60\u{1f}5"),
+            TmuxWindowGrid(cols: 209, rows: 60, statusRows: 5))
     }
 
     func testParseWindowGridLineInvalid() {
         XCTAssertNil(TmuxFormat.parseWindowGridLine(""))
         XCTAssertNil(TmuxFormat.parseWindowGridLine("209"))
-        XCTAssertNil(TmuxFormat.parseWindowGridLine("x\u{1f}y"))
-        XCTAssertNil(TmuxFormat.parseWindowGridLine("0\u{1f}60"))
-        XCTAssertNil(TmuxFormat.parseWindowGridLine("209\u{1f}0"))
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("209\u{1f}60"))
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("x\u{1f}y\u{1f}on"))
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("0\u{1f}60\u{1f}on"))
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("209\u{1f}0\u{1f}on"))
+        // #{status} が未対応の tmux では空文字に展開されるため、格子不明として扱う。
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("209\u{1f}60\u{1f}"))
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("209\u{1f}60\u{1f}6"))
+        XCTAssertNil(TmuxFormat.parseWindowGridLine("209\u{1f}60\u{1f}1"))
     }
 
     func testParseSessionIDLinePreservesPaneTargetCharactersInName() {

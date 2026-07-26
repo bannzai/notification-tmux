@@ -66,12 +66,18 @@ struct TmuxWindow: Identifiable, Equatable, Hashable {
     var sessionID: String { TmuxID.make(hostID: host.id, element: sessionName) }
 }
 
-/// tmux window の格子サイズ (列 × 行)。表示フォントのフィット計算 (issue #36) の入力。
+/// tmux window の格子サイズ (列 × 行) と status line の行数。
+/// 表示フォントのフィット計算 (issue #36) と terminal 寸法の格子固定 (issue #60) の入力。
 struct TmuxWindowGrid: Equatable {
     /// window の列数 (#{window_width})。
     let cols: Int
-    /// window の行数 (#{window_height})。
+    /// window の行数 (#{window_height})。status line は含まない。
     let rows: Int
+    /// attach した client が window と併せて表示する status line の行数 (#{status} を行数へ解決した値)。
+    let statusRows: Int
+
+    /// client が window 全体と status line をパン無しで表示するのに必要な行数。
+    var rowsWithStatus: Int { rows + statusRows }
 }
 
 /// tmux の 1 session。cmux でいう workspace に対応する。
@@ -102,8 +108,9 @@ enum TmuxFormat {
     static let sessionIDFormat = "#{session_id}\u{1f}#{session_name}"
     /// `list-clients -F` 用。SwiftTerm の子 PID から Noroshi 自身の tmux client を特定する。
     static let clientFormat = "#{client_pid}\u{1f}#{client_tty}\u{1f}#{session_name}"
-    /// `display-message -p` 用。attach 中 session のカレント window の格子サイズを取得する。
-    static let windowGridFormat = "#{window_width}\u{1f}#{window_height}"
+    /// `display-message -p` 用。attach 中 session のカレント window の格子サイズと status line 行数を取得する。
+    /// #{status} は format 変数に無い名前としてオプション値 (off / on / 2〜5) へ解決される (man tmux FORMATS)。
+    static let windowGridFormat = "#{window_width}\u{1f}#{window_height}\u{1f}#{status}"
 
     /// `windowFormat` で出力された 1 行を host 上の TmuxWindow にする。形式が合わない行は nil。
     static func parseWindowLine(_ line: String, host: TmuxHost = .local) -> TmuxWindow? {
@@ -133,12 +140,24 @@ enum TmuxFormat {
     /// `windowGridFormat` で出力された 1 行を TmuxWindowGrid にする。形式が合わない行は nil。
     static func parseWindowGridLine(_ line: String) -> TmuxWindowGrid? {
         let parts = line.split(separator: fieldSeparator, omittingEmptySubsequences: false).map(String.init)
-        guard parts.count == 2,
+        guard parts.count == 3,
               let cols = Int(parts[0]),
               let rows = Int(parts[1]),
-              cols > 0, rows > 0
+              cols > 0, rows > 0,
+              let statusRows = parseStatusRows(parts[2])
         else { return nil }
-        return TmuxWindowGrid(cols: cols, rows: rows)
+        return TmuxWindowGrid(cols: cols, rows: rows, statusRows: statusRows)
+    }
+
+    /// `#{status}` オプション値 (off / on / 2〜5, man tmux OPTIONS) を status line の行数にする。想定外の値は nil。
+    private static func parseStatusRows(_ value: String) -> Int? {
+        switch value {
+        case "off": return 0
+        case "on": return 1
+        default:
+            guard let rows = Int(value), (2 ... 5).contains(rows) else { return nil }
+            return rows
+        }
     }
 
     /// `clientFormat` で出力された 1 行を tmux client 情報にする。形式が合わない行は nil。

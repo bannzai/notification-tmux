@@ -13,7 +13,7 @@ enum TerminalFontFit {
     /// 候補サイズの刻み (pt)。フォントは小数サイズを受け付けるが、0.5 刻みで格子 1〜2 列分の精度が出て実用上十分。
     static let sizeStep: CGFloat = 0.5
 
-    /// preferred を上限に sizeStep 刻みで縮小しながら、window の格子が収まる最大サイズを返す。
+    /// preferred を上限に sizeStep 刻みで縮小しながら、window の格子と status line が収まる最大サイズを返す。
     /// 下限まで縮めても収まらない場合は下限を返す。preferred が下限以下ならユーザー設定を尊重してそのまま返す。
     /// cellSize にはフォントサイズ → 1 セル寸法の解決 (SwiftTerm と同じ式) を注入する。
     static func fittedSize(
@@ -28,12 +28,24 @@ enum TerminalFontFit {
             let cell = cellSize(size)
             guard cell.width > 0, cell.height > 0 else { continue }
             if Int((viewSize.width - scrollerWidth) / cell.width) >= grid.cols,
-               Int(viewSize.height / cell.height) >= grid.rows
+               Int(viewSize.height / cell.height) >= grid.rowsWithStatus
             {
                 return size
             }
         }
         return minimumFontSize
+    }
+
+    /// window 格子 + status line がちょうど収まる terminal view の frame 寸法 (pt) を返す。
+    /// terminal をこの寸法へ固定すると client の格子が window に一致し、余った領域へ tmux が
+    /// fill-character (既定 `·`) を敷き詰める余地が無くなる (issue #60)。
+    /// 0.25pt の上乗せは、セル寸法との積の浮動小数点誤差で SwiftTerm の Int() 切り捨て
+    /// (processSizeChange) が 1 列/行少なく数えるのを防ぐため。最小フォント 6pt のセル幅 (約 3.6pt)
+    /// より十分小さいので、格子が 1 列/行多くなることはない。
+    static func constrainedViewSize(grid: TmuxWindowGrid, cell: CGSize, scrollerWidth: CGFloat) -> CGSize {
+        CGSize(
+            width: CGFloat(grid.cols) * cell.width + scrollerWidth + 0.25,
+            height: CGFloat(grid.rowsWithStatus) * cell.height + 0.25)
     }
 
     /// SwiftTerm (AppleTerminalView.computeFontDimensions) と同じ式で 1 セルの寸法を求める。
