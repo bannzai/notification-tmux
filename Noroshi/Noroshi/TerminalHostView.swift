@@ -84,19 +84,28 @@ final class MouseReportingTerminalView: LocalProcessTerminalView {
         registerForDraggedTypes([.fileURL])
     }
 
-    /// file URL を含むドラッグだけコピー操作として受け入れる。それ以外はデスクトップへ戻す既定挙動のまま。
+    /// ローカル attach 中の file URL ドラッグだけコピー操作として受け入れる。それ以外はデスクトップへ戻す既定挙動のまま。
+    /// リモート (ssh) attach 中はローカルのパスが接続先に存在せずシェアが成立しないため、ドロップ自体を受け入れない。
     override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
-        sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) ? .copy : []
+        guard TerminalSessionManager.shared.managedHost == .local,
+              sender.draggingPasteboard.canReadObject(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true])
+        else { return [] }
+        return .copy
     }
 
     /// ドロップされたファイルのパスをシェルエスケープして attach 先 pane のプロンプトへ挿入する。
     /// 挿入のみで改行は送らない。送信内容の確認と実行タイミングをユーザーに委ねるため。
+    /// draggingEntered 後にドロップまでの間 host が切り替わり得るため、リモート attach の除外はここでも判定する。
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
-        guard let urls = sender.draggingPasteboard.readObjects(
-            forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
-            !urls.isEmpty
+        guard TerminalSessionManager.shared.managedHost == .local,
+              let urls = sender.draggingPasteboard.readObjects(
+                  forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+              !urls.isEmpty
         else { return false }
-        send(txt: TerminalFileDrop.insertionText(paths: urls.map(\.path)))
+        let insertionText = TerminalFileDrop.insertionText(paths: urls.map(\.path))
+        // 制御文字入りファイル名の除外で挿入テキストが空になった場合はドロップ不成立として返す。
+        guard !insertionText.isEmpty else { return false }
+        send(txt: insertionText)
         // 続けてプロンプトを打てるよう、ドロップ完了後は terminal へフォーカスを移す。
         TerminalSessionManager.shared.focusTerminal()
         return true
@@ -332,14 +341,20 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// メニュー「画像・ファイルをシェア」(cmd+shift+i) から、選択したファイルのパスを表示中 terminal のプロンプトへ挿入する (issue #41)。
-    /// Drag & Drop と同じ挿入 (TerminalFileDrop) のキーボード操作版。terminal 未表示時とキャンセル時は何もしない (冪等)。
+    /// Drag & Drop と同じ挿入 (TerminalFileDrop) のキーボード操作版。
+    /// terminal 未表示時・リモート attach 時 (ローカルのパスが接続先に存在しない)・キャンセル時は何もしない (冪等)。
     func presentFileSharePanel() {
-        guard let view = currentView else { return }
+        guard currentHost == .local, currentView != nil else { return }
         let panel = NSOpenPanel()
         panel.allowsMultipleSelection = true
         panel.canChooseDirectories = false
-        guard panel.runModal() == .OK, !panel.urls.isEmpty else { return }
-        view.send(txt: TerminalFileDrop.insertionText(paths: panel.urls.map(\.path)))
+        // runModal のネストした event loop 中もポーリングや session 切替は進み、attach 終了で view が
+        // terminate され得るため、挿入先はパネルが閉じた後の現在値から取り直す。
+        guard panel.runModal() == .OK, !panel.urls.isEmpty, currentHost == .local, let view = currentView else { return }
+        let insertionText = TerminalFileDrop.insertionText(paths: panel.urls.map(\.path))
+        // 制御文字入りファイル名の除外で挿入テキストが空になった場合は何も挿入しない。
+        guard !insertionText.isEmpty else { return }
+        view.send(txt: insertionText)
         focusTerminal()
     }
 
