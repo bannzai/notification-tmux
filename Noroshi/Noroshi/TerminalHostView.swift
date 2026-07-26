@@ -225,6 +225,9 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     private var baseFont: NSFont?
     /// scheduleRefitFont の合流フラグ。true の間は再フィットが予約済みで、追加の予約は行わない。
     private var pendingRefit = false
+    /// terminal を window 格子ちょうどの寸法 (格子 + status line) へ固定する制約 (issue #60)。格子不明の間は無効。
+    /// コンテナ全面フィル (defaultLow) より強く、コンテナの縁 (required) からはみ出す時だけ負ける defaultHigh。
+    private var gridSizeConstraints: (width: NSLayoutConstraint, height: NSLayoutConstraint)?
     /// ホイール / ドラッグを横取りして tmux へマウスレポートを送るための local event monitor。生成後は最大 1 本。
     private var mouseMonitor: Any?
     /// 左ボタン押下時のセル座標。押下と同一セルで離した場合だけクリックとみなしリンクを開くための記録。
@@ -393,6 +396,8 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         baseFont = view.font
         // 前の session の格子を引き継がず、取得完了までフィット無し (設定サイズのまま) で表示する。
         windowGrid = nil
+        // 制約は view に属するため、作り直した view には引き継がず格子取得後に作り直す。
+        gridSizeConstraints = nil
         view.processDelegate = self
         // SwiftTerm 自身の暗黙 URL 検出による自動オープンを止める。リンクオープンは Noroshi が独自のクリック検出で行うため二重化させない。
         // .alwaysWithModifier では linkForClick が暗黙リンク (match.isExplicit == false) を常に nil 扱いにするので、
@@ -475,9 +480,43 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
             // として tmux の全キャッシュ破棄 (tty_invalidate) と全再描画を強制できる (ADR 0010)。
             view.setFrameSize(view.frame.size)
         }
+        updateGridSizeConstraints(for: view)
     }
 
-    /// window 格子が判明している場合、view の表示領域に格子全体が収まるサイズへ縮小したフォントを返す。
+    /// terminal の寸法を window 格子ちょうど (格子 + status line が収まる大きさ) に固定し、余った領域へ
+    /// tmux が fill-character (既定 `·`) を敷き詰めるのを防ぐ (issue #60)。余白はコンテナが terminal と
+    /// 同じ背景色で塗る。格子不明時は制約を無効化してコンテナ全面フィルに戻す。同じ状態の再適用は
+    /// 同じ制約値へ収束する (冪等)。
+    private func updateGridSizeConstraints(for view: MouseReportingTerminalView) {
+        // 取り付け前 (superview 無し) は何もしない。取り付け時のレイアウトで scheduleRefitFont が再度呼ぶ。
+        guard let container = view.superview else { return }
+        (container as? TerminalContainerView)?.backgroundColor = view.nativeBackgroundColor
+        guard let windowGrid else {
+            gridSizeConstraints?.width.isActive = false
+            gridSizeConstraints?.height.isActive = false
+            return
+        }
+        // fittedFont と同じフォールバックでピクセル密度を解決する (セル寸法のスナップ一致のため)。
+        let scale = view.window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 1
+        let size = TerminalFontFit.constrainedViewSize(
+            grid: windowGrid,
+            cell: TerminalFontFit.cellSize(of: view.font, scale: scale),
+            scrollerWidth: NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy))
+        let constraints = gridSizeConstraints ?? (
+            width: view.widthAnchor.constraint(equalToConstant: size.width),
+            height: view.heightAnchor.constraint(equalToConstant: size.height))
+        if gridSizeConstraints == nil {
+            constraints.width.priority = .defaultHigh
+            constraints.height.priority = .defaultHigh
+            gridSizeConstraints = constraints
+        }
+        constraints.width.constant = size.width
+        constraints.height.constant = size.height
+        constraints.width.isActive = true
+        constraints.height.isActive = true
+    }
+
+    /// window 格子が判明している場合、利用可能な表示領域に格子全体が収まるサイズへ縮小したフォントを返す。
     /// 格子が不明、または既に収まる場合は preferred をそのまま返す。
     private func fittedFont(preferred: NSFont, in view: MouseReportingTerminalView) -> NSFont {
         guard let windowGrid else { return preferred }
@@ -486,7 +525,8 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
         let size = TerminalFontFit.fittedSize(
             preferred: preferred.pointSize,
             grid: windowGrid,
-            viewSize: view.frame.size,
+            // 格子固定 (issue #60) で view がコンテナより小さいことがあるため、利用可能な領域はコンテナ側から取る。
+            viewSize: view.superview?.bounds.size ?? view.frame.size,
             // SwiftTerm の processSizeChange は scroller 幅を引いた実効幅で列数を計算するため同じ幅を引く。
             scrollerWidth: NSScroller.scrollerWidth(for: .regular, scrollerStyle: .legacy),
             cellSize: { TerminalFontFit.cellSize(of: NSFont(descriptor: preferred.fontDescriptor, size: $0) ?? preferred, scale: scale) })
@@ -630,6 +670,33 @@ final class TerminalSessionManager: NSObject, LocalProcessTerminalViewDelegate {
     }
 }
 
+/// terminal を取り付けるコンテナ。格子固定 (issue #60) で terminal がコンテナ全面を覆わないことがあるため、
+/// 余白を terminal と同じ背景色で塗り、コンテナ自体のリサイズでフォント再フィットを促す。
+final class TerminalContainerView: NSView {
+    /// terminal が覆わない余白の塗り色。TerminalSessionManager が terminal の nativeBackgroundColor と同じ値を設定する。
+    var backgroundColor: NSColor? {
+        didSet { layer?.backgroundColor = backgroundColor?.cgColor }
+    }
+
+    // 背景塗りを layer で行うため wantsLayer を有効化する。
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        wantsLayer = true
+    }
+
+    /// コンテナ側のリサイズでも格子フィットを再計算する。terminal が格子寸法へ固定されていると
+    /// コンテナ拡大時に terminal の setFrameSize が呼ばれず、縮小されたフォントが戻らないため。
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        TerminalSessionManager.shared.scheduleRefitFont()
+    }
+}
+
 /// 選択中 session の terminal を表示する SwiftUI ラッパ。
 /// session 切り替え時は単一 attach 方式に従い、同一 host 内なら同じtmux clientの接続先を切り替える。
 struct TerminalHostView: NSViewRepresentable {
@@ -642,7 +709,7 @@ struct TerminalHostView: NSViewRepresentable {
     let takesFocus: Bool
 
     func makeNSView(context: Context) -> NSView {
-        let container = NSView()
+        let container = TerminalContainerView()
         install(on: container)
         return container
     }
@@ -671,16 +738,23 @@ struct TerminalHostView: NSViewRepresentable {
         if takesFocus { manager.focusTerminal() }
     }
 
-    /// terminal をコンテナ全面に固定して取り付ける。manager の切替失敗時の作り直しと
+    /// terminal をコンテナ左上を基点に取り付ける。manager の切替失敗時の作り直しと
     /// 素のターミナル (PlainTerminalHostView, issue #54) でも同じ取り付けを使う。
+    /// 寸法は全面フィル (defaultLow) と window 格子ちょうどの固定 (defaultHigh, TerminalSessionManager が
+    /// 付与; issue #60) の優先度差で決まり、格子固定が無い間は従来どおり全面に広がる。
     static func pin(_ terminal: NSView, in container: NSView) {
         terminal.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(terminal)
+        let fillWidth = terminal.widthAnchor.constraint(equalTo: container.widthAnchor)
+        let fillHeight = terminal.heightAnchor.constraint(equalTo: container.heightAnchor)
+        fillWidth.priority = .defaultLow
+        fillHeight.priority = .defaultLow
         NSLayoutConstraint.activate([
             terminal.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            terminal.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             terminal.topAnchor.constraint(equalTo: container.topAnchor),
-            terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+            terminal.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor),
+            terminal.bottomAnchor.constraint(lessThanOrEqualTo: container.bottomAnchor),
+            fillWidth, fillHeight,
         ])
     }
 }

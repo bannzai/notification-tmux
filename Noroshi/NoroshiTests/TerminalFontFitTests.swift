@@ -18,7 +18,7 @@ final class TerminalFontFitTests: XCTestCase {
         XCTAssertEqual(
             TerminalFontFit.fittedSize(
                 preferred: 10,
-                grid: TmuxWindowGrid(cols: 80, rows: 20),
+                grid: TmuxWindowGrid(cols: 80, rows: 20, statusRows: 0),
                 viewSize: CGSize(width: 615, height: 400),
                 scrollerWidth: 15,
                 cellSize: syntheticCell),
@@ -30,7 +30,7 @@ final class TerminalFontFitTests: XCTestCase {
         XCTAssertEqual(
             TerminalFontFit.fittedSize(
                 preferred: 10,
-                grid: TmuxWindowGrid(cols: 120, rows: 10),
+                grid: TmuxWindowGrid(cols: 120, rows: 10, statusRows: 0),
                 viewSize: CGSize(width: 615, height: 400),
                 scrollerWidth: 15,
                 cellSize: syntheticCell),
@@ -42,7 +42,7 @@ final class TerminalFontFitTests: XCTestCase {
         XCTAssertEqual(
             TerminalFontFit.fittedSize(
                 preferred: 10,
-                grid: TmuxWindowGrid(cols: 10, rows: 25),
+                grid: TmuxWindowGrid(cols: 10, rows: 25, statusRows: 0),
                 viewSize: CGSize(width: 615, height: 400),
                 scrollerWidth: 15,
                 cellSize: syntheticCell),
@@ -54,22 +54,50 @@ final class TerminalFontFitTests: XCTestCase {
         XCTAssertEqual(
             TerminalFontFit.fittedSize(
                 preferred: 10,
-                grid: TmuxWindowGrid(cols: 10, rows: 40),
+                grid: TmuxWindowGrid(cols: 10, rows: 40, statusRows: 0),
                 viewSize: CGSize(width: 615, height: 400),
                 scrollerWidth: 15,
                 cellSize: syntheticCell),
             TerminalFontFit.minimumFontSize)
     }
 
+    func testFittedSizeCountsStatusRows() {
+        // window 20 行だけなら 400 / (10 * 2) = 20 rows で収まるが、status line 1 行分を足すと
+        // 400 / (size * 2) ≥ 21 を満たす最大の 0.5 刻み 9.5 まで縮む。
+        XCTAssertEqual(
+            TerminalFontFit.fittedSize(
+                preferred: 10,
+                grid: TmuxWindowGrid(cols: 80, rows: 20, statusRows: 1),
+                viewSize: CGSize(width: 615, height: 400),
+                scrollerWidth: 15,
+                cellSize: syntheticCell),
+            9.5)
+    }
+
     func testFittedSizeKeepsPreferredAtOrBelowMinimum() {
         XCTAssertEqual(
             TerminalFontFit.fittedSize(
                 preferred: 5,
-                grid: TmuxWindowGrid(cols: 1000, rows: 1000),
+                grid: TmuxWindowGrid(cols: 1000, rows: 1000, statusRows: 1),
                 viewSize: CGSize(width: 615, height: 400),
                 scrollerWidth: 15,
                 cellSize: syntheticCell),
             5)
+    }
+
+    func testConstrainedViewSizeYieldsExactGrid() {
+        // 格子固定寸法 (issue #60) を SwiftTerm の processSizeChange と同じ式に通すと、
+        // 列 = window 列、行 = window 行 + status 行にちょうど一致する (余白セルが生まれない)。
+        for (grid, fontSize) in [
+            (TmuxWindowGrid(cols: 80, rows: 24, statusRows: 1), CGFloat(10)),
+            (TmuxWindowGrid(cols: 209, rows: 60, statusRows: 0), 7.5),
+            (TmuxWindowGrid(cols: 163, rows: 53, statusRows: 2), 6),
+        ] {
+            let cell = syntheticCell(fontSize)
+            let size = TerminalFontFit.constrainedViewSize(grid: grid, cell: cell, scrollerWidth: 15)
+            XCTAssertEqual(Int((size.width - 15) / cell.width), grid.cols, "cols for \(grid)")
+            XCTAssertEqual(Int(size.height / cell.height), grid.rows + grid.statusRows, "rows for \(grid)")
+        }
     }
 
     /// cellSize が SwiftTerm の格子計算 (resetFont: cols = frame.width / cellWidth) と一致することを確認する。

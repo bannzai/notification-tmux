@@ -37,7 +37,8 @@ tmux list-windows -t noroshi-e2e -F '#{session_name} #{window_id} #{window_name}
 6. タブが関係する変更では、「移動 > 新規タブ」(cmd+T) でタブバーが表示され、新規タブに素のターミナルが開き (issue #54)、タブ切替 (ctrl+tab) で選択 session がタブごとに保たれ、「File > タブを閉じる」(cmd+W) で閉じられることを確認する。新規タブで cmd+opt+s を押しても attach されないことも確認する (issue #57)。素のターミナルで `exit` するとタブが閉じ、最後の 1 枚では新しいシェルに置き換わることを確認する。
 7. リモートホスト (ssh) が関係する変更では、鍵認証で入れる ssh 先がある場合のみ `~/.config/noroshi/config` に `remote-host = <host>` を追記し、リモート session の一覧表示・attach・切替を確認する (確認後に追記を戻す)。ssh 先が無い環境ではユニットテストとローカル経路の確認までとし、報告に未検証と明記する。
 8. 日本語 IME が関係する変更では、変換前の文字列がキャレット付近に表示され、文字を短縮・削除したときに古い文字が残らないことを確認する。
-9. 確認結果を残すため、Noroshi の画面が見える状態でスクリーンショットを撮る。
+9. terminal の表示寸法が関係する変更では、window が Noroshi の格子より小さい状態 (detach 状態で作った `noroshi-e2e` は 80x24 のまま) で attach し、terminal の右・下の余白が `·` (fill-character) で埋まらず背景色のままであることを確認する (issue #60)。
+10. 確認結果を残すため、Noroshi の画面が見える状態でスクリーンショットを撮る。
 
    ```sh
    mkdir -p tmp/e2e
