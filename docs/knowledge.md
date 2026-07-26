@@ -97,6 +97,7 @@
 | 一覧はポーリング (2s) | 実装が単純で 100+ window でも軽い。イベント駆動化は set-hook で可能 (上記) |
 | 通知イベントの重複抑止はしない | hook の発火回数 (Stop 1 回 = 1 通知) に委ねる。スクリプトは状態レス |
 | session の自動選択・自動 attach はしない (issue #48) | 起動時は未選択のまま、選択 session の kill 時は選択解除のみ。自動 attach すると ssh ごしに起動した tmux session を勝手に掴んでしまう |
+| サイドバーへのフォーカス移動では選択・attach しない (issue #57) | cmd+opt+s や Full Keyboard Access の Tab 移動・システムのフォーカス再割り当てが、session 未選択のタブ (起動直後・新規タブ) に先頭 session を勝手に attach してしまう。選択を変えるのは明示操作 (クリック / ↑↓ ナビゲーション / cmd+数字 等) のみ |
 
 ## 7. 実測値
 
