@@ -38,7 +38,20 @@ tmux list-windows -t noroshi-e2e -F '#{session_name} #{window_id} #{window_name}
 7. リモートホスト (ssh) が関係する変更では、鍵認証で入れる ssh 先がある場合のみ `~/.config/noroshi/config` に `remote-host = <host>` を追記し、リモート session の一覧表示・attach・切替を確認する (確認後に追記を戻す)。ssh 先が無い環境ではユニットテストとローカル経路の確認までとし、報告に未検証と明記する。
 8. 日本語 IME が関係する変更では、変換前の文字列がキャレット付近に表示され、文字を短縮・削除したときに古い文字が残らないことを確認する。
 9. terminal の表示寸法が関係する変更では、window が Noroshi の格子より小さい状態 (detach 状態で作った `noroshi-e2e` は 80x24 のまま) で attach し、terminal の右・下の余白が `·` (fill-character) で埋まらず背景色のままであることを確認する (issue #60)。
-10. 確認結果を残すため、Noroshi の画面が見える状態でスクリーンショットを撮る。
+10. terminal の描画・スクロールが関係する変更 (SwiftTerm の pin 更新、font・表示寸法の再同期、レンダリングまわり) では、attach 中の window に Claude Code の thinking 相当の負荷 (連続スクロール + pane title 更新 + CR スピナー) をかけ、ステータスライン・pane border の残像が積み上がらないことを確認する (issue #49, #58)。tmux のスクロール経路は pane の幅で変わるため、全幅 pane (DECSTBM 上下マージン経路) と左右分割 pane (DECSLRM 左右マージン経路) の両方で確認する (#58 の再現報告は左右分割のみ)。
+
+   ```sh
+   # 全幅 pane (DECSTBM 経路)
+   tmux send-keys -t noroshi-e2e:@<window_id> 'i=0; while [ "$i" -lt 3000 ]; do i=$((i+1)); printf "\033]2;load %d\007scroll %d\n| thinking\r" "$i" "$i"; sleep 0.02; done; printf "\nDONE\n"' Enter
+
+   # 左右分割 pane (DECSLRM 経路)。pane border の残像を確認するため border-status を表示する
+   tmux set -t noroshi-e2e pane-border-status top
+   tmux split-window -h -t noroshi-e2e:@<window_id>
+   tmux list-panes -t noroshi-e2e:@<window_id> -F '#{pane_id} #{pane_left}'
+   ```
+
+   `#{pane_left}` が 0 の pane (左側) に同じ負荷を `tmux send-keys -t %<pane_id>` で流す。各負荷の `DONE` 表示後に、最下行のステータスラインと pane border が 1 本のまま増殖していないこと、行頭に前フレームのグリフ断片が残っていないことを確認する。あわせて window 切替 (cmd+shift+]) と往復後も残像が現れないことを確認する。
+11. 確認結果を残すため、Noroshi の画面が見える状態でスクリーンショットを撮る。
 
    ```sh
    mkdir -p tmp/e2e
