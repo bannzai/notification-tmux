@@ -1,0 +1,6 @@
+# linguist-generated begin
+# configure-linguist-generated skill が管理する区間です。
+# profiles: swift
+**/*.generated.swift linguist-generated
+**/Generated/** linguist-generated
+# linguist-generated end
