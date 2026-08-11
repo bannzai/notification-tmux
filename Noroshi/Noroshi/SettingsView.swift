@@ -8,6 +8,8 @@ import SwiftUI
 /// SwiftUI の `Settings` シーンに載せると Cmd+, が自動でバインドされる。
 struct SettingsView: View {
     @StateObject private var model = SettingsModel()
+    /// OSS ライセンスウィンドウを開くためのアクション。
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         Form {
@@ -61,6 +63,10 @@ struct SettingsView: View {
                     get: { model.cursorColor }, set: { model.setColor(.cursorColor, $0) }))
                 ColorPicker("選択範囲", selection: Binding(
                     get: { model.selectionBackground }, set: { model.setColor(.selectionBackground, $0) }))
+            }
+
+            Section("このアプリについて") {
+                Button("OSS ライセンス") { openWindow(id: LicenseWindowView.windowID) }
             }
         }
         .formStyle(.grouped)
