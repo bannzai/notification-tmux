@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		2020F0012FFD4F1900247CCD /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 2020F0032FFD4F1900247CCD /* SwiftTerm */; };
+		2020F0042FFD4F1900247CCD /* LicenseList in Frameworks */ = {isa = PBXBuildFile; productRef = 2020F0062FFD4F1900247CCD /* LicenseList */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -44,6 +45,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2020F0012FFD4F1900247CCD /* SwiftTerm in Frameworks */,
+				2020F0042FFD4F1900247CCD /* LicenseList in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -96,6 +98,7 @@
 			name = Noroshi;
 			packageProductDependencies = (
 				2020F0032FFD4F1900247CCD /* SwiftTerm */,
+				2020F0062FFD4F1900247CCD /* LicenseList */,
 			);
 			productName = Noroshi;
 			productReference = 202025CD2FFD4F1600247CCD /* Noroshi.app */;
@@ -154,6 +157,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				2020F0022FFD4F1900247CCD /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				2020F0052FFD4F1900247CCD /* XCRemoteSwiftPackageReference "LicenseList" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 202025CE2FFD4F1600247CCD /* Products */;
@@ -478,6 +482,14 @@
 				revision = d5ee56e1c74777120f3af688600d336de4201bd2;
 			};
 		};
+		2020F0052FFD4F1900247CCD /* XCRemoteSwiftPackageReference "LicenseList" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/cybozu/LicenseList.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 2.5.0;
+			};
+		};
 /* End XCRemoteSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
@@ -485,6 +497,11 @@
 			isa = XCSwiftPackageProductDependency;
 			package = 2020F0022FFD4F1900247CCD /* XCRemoteSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
+		};
+		2020F0062FFD4F1900247CCD /* LicenseList */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 2020F0052FFD4F1900247CCD /* XCRemoteSwiftPackageReference "LicenseList" */;
+			productName = LicenseList;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -54,6 +54,11 @@ struct NoroshiApp: App {
         Settings {
             SettingsView()
         }
+
+        // ライセンス本文は設定ウィンドウ (420x400 固定) では読みづらいため独立したウィンドウにする。
+        Window("OSS ライセンス", id: LicenseWindowView.windowID) {
+            LicenseWindowView()
+        }
     }
 }
 
@@ -64,8 +69,16 @@ struct NoroshiApp: App {
 struct NavigationCommands: Commands {
     /// 移動操作の委譲先。
     @ObservedObject var appState: AppState
+    /// OSS ライセンスウィンドウを開くためのアクション。
+    @Environment(\.openWindow) private var openWindow
 
     var body: some Commands {
+        // macOS 標準の「Noroshi について」と同じアプリメニューに、OSS ライセンス一覧を並べる。
+        CommandGroup(after: .appInfo) {
+            Button("OSS ライセンス") { openWindow(id: LicenseWindowView.windowID) }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+        }
+
         // cmd+P は標準の Print と衝突するため、Print 系メニューを空で置き換えて cmd+P をコマンドパレットへ解放する。
         CommandGroup(replacing: .printItem) {}
 

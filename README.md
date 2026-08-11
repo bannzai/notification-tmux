@@ -78,6 +78,7 @@ Noroshi.app ◀─────────────────────�
 | `cmd+[` | 表示中 session のカレント window 内でアクティブ pane を前へ移す |
 | `cmd+shift+r` | テーマ設定を再読み込みして表示中 terminal に適用する |
 | `cmd+,` | 設定ウィンドウ (フォント・テーマ・色) を開く |
+| `cmd+shift+l` | 依存 OSS のライセンス一覧ウィンドウを開く |
 
 ### 設定 (フォント・テーマ・色)
 
@@ -91,6 +92,10 @@ scripts/noroshi-port-ghostty-config --force  # 出力先が既にある場合に
 ```
 
 抽出対象は `theme` / `background` / `foreground` / `cursor-color` / `selection-background` / `palette` / `font-family` / `font-style` / `font-size`。元の ghostty config には触れない。
+
+### OSS ライセンス
+
+アプリメニュー「Noroshi > OSS ライセンス」(cmd+shift+l)、または設定ウィンドウの「このアプリについて」から、依存している OSS の名称とライセンス本文を確認できる。一覧は [LicenseList](https://github.com/cybozu/LicenseList) の build tool plugin が SwiftPM の解決結果からビルドのたびに生成するため、依存を足し引きすると自動で追従する。
 
 ### リモートホスト (ssh)
 
@@ -126,6 +131,7 @@ Noroshi/
     NoroshiConfig.swift      # 独自 config のパス解決 (noroshi 優先・ghostty フォールバック) と入出力
     NoroshiConfigEditor.swift # config テキストの書き戻し (キー設定・削除、冪等)
     SettingsView.swift       # cmd+, の設定ウィンドウ (フォント・テーマ・色)
+    LicenseWindow.swift      # cmd+shift+l の OSS ライセンス一覧ウィンドウ (LicenseList が依存から生成)
     AppState.swift           # ポーリング (全 host)・バッジ台帳・通知履歴・タブ・選択状態・ショートカット操作
     TmuxClient.swift         # tmux CLI ラッパ (リモートは ssh 経由)
     TmuxModels.swift         # TmuxHost / TmuxSession / TmuxWindow / StopEvent / NoroshiNavigation とパーサ
