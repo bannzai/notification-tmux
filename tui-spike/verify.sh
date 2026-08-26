@@ -46,6 +46,7 @@ wait_for "tmux -L $IN capture-pane -p -t inner:0.0 2>/dev/null | grep -q INNER_R
 
 echo "=== 2. noroshi-outer start で外側を構築 (非 tty なので attach はしない) ==="
 NOROSHI_OUTER_SOCKET="$OUT" \
+NOROSHI_INNER_TMUX="tmux -L $IN" \
 NOROSHI_INNER_TMUX_CMD="tmux -L $IN attach -t inner" \
   bash "$SPIKE_DIR/noroshi-outer" start </dev/null || fail "noroshi-outer start"
 
@@ -62,10 +63,14 @@ wait_for "tmux -L $OUT capture-pane -p -t noroshi:0.1 2>/dev/null | grep -q INNE
 
 echo "=== 3. 冪等性: start を再実行しても pane が増えない ==="
 NOROSHI_OUTER_SOCKET="$OUT" \
+NOROSHI_INNER_TMUX="tmux -L $IN" \
 NOROSHI_INNER_TMUX_CMD="tmux -L $IN attach -t inner" \
   bash "$SPIKE_DIR/noroshi-outer" start </dev/null >/dev/null 2>&1
 [ "$(tmux -L "$OUT" list-panes -t noroshi:0 | wc -l | tr -d ' ')" = 2 ] \
   && pass "start は冪等 (2 pane のまま)" || fail "start は冪等"
+
+tmux -L "$IN" list-keys -T prefix N 2>/dev/null | grep -q noroshi-outer \
+  && pass "内側に prefix+N のジャンプキーが注入されている" || fail "内側へのジャンプキー注入"
 
 echo "=== 4. 実キー経路: 端末代役 T から prefix キーが内側まで届く ==="
 tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y 60 \
@@ -80,16 +85,18 @@ wait_for "[ \"\$(tmux -L $IN list-windows -t inner 2>/dev/null | wc -l | tr -d '
   && pass "prefix (C-b c) が外側を素通りして内側に window が増えた" \
   || fail "prefix (C-b c) が内側に届かない"
 
-echo "=== 4b. M-o で左右フォーカス移動 (外側唯一のキーバインド) ==="
+echo "=== 4b. キーボードで左右フォーカス移動 ==="
 active_pane_is_sidebar() {
   [ "$(tmux -L "$OUT" list-panes -t noroshi:0 -f '#{pane_active}' -F '#{@noroshi-sidebar}')" = 1 ]
 }
-tmux -L "$T" send-keys -t term:0.0 M-o
+# 内側 (代役) の prefix は C-b。注入された prefix+N で内側 → サイドバーへ移る
+tmux -L "$T" send-keys -t term:0.0 C-b N
 wait_for "active_pane_is_sidebar" \
-  && pass "M-o でサイドバーへフォーカスが移る" || fail "M-o でサイドバーへフォーカスが移らない"
-tmux -L "$T" send-keys -t term:0.0 M-o
+  && pass "prefix+N でサイドバーへフォーカスが移る" || fail "prefix+N でサイドバーへフォーカスが移らない"
+# サイドバー (プレースホルダ) は何かキーで内側へ戻す
+tmux -L "$T" send-keys -t term:0.0 x
 wait_for "! active_pane_is_sidebar" \
-  && pass "もう一度 M-o で内側へフォーカスが戻る" || fail "M-o で内側へフォーカスが戻らない"
+  && pass "サイドバーで何かキーを押すと内側へフォーカスが戻る" || fail "サイドバーから内側へフォーカスが戻らない"
 
 echo "=== 5. サイドバーのトグル ==="
 NOROSHI_OUTER_SOCKET="$OUT" bash "$SPIKE_DIR/noroshi-outer" toggle </dev/null
@@ -110,13 +117,16 @@ inner_pane=$(tmux -L "$OUT" list-panes -t noroshi:0 -f '#{?#{@noroshi-sidebar},0
 wait_for "tmux -L $OUT capture-pane -p -t $inner_pane 2>/dev/null | grep -qF '[inner]'" \
   && pass "トグル後も内側 attach が生きている" || fail "トグル後に内側 attach が切れた"
 
-echo "=== 6. stop は外側だけを落とす ==="
+echo "=== 6. stop は外側と注入キーだけを片付ける ==="
 tmux -L "$T" kill-server 2>/dev/null
-NOROSHI_OUTER_SOCKET="$OUT" bash "$SPIKE_DIR/noroshi-outer" stop </dev/null >/dev/null
+NOROSHI_OUTER_SOCKET="$OUT" NOROSHI_INNER_TMUX="tmux -L $IN" \
+  bash "$SPIKE_DIR/noroshi-outer" stop </dev/null >/dev/null
 tmux -L "$OUT" has-session 2>/dev/null \
   && fail "stop 後も外側 server が残っている" || pass "stop で外側 server が消えた"
 tmux -L "$IN" has-session -t inner 2>/dev/null \
   && pass "内側 server は無傷" || fail "内側 server が巻き添えで死んだ"
+tmux -L "$IN" list-keys -T prefix N 2>/dev/null | grep -q noroshi-outer \
+  && fail "stop 後も注入キーが残っている" || pass "stop で注入キー (prefix+N) が解除された"
 
 echo
 if [ "$FAIL" = 0 ]; then
