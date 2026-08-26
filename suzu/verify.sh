@@ -22,6 +22,9 @@ IN="szv-in-$$"
 OUT="szv-out-$$"
 T="szv-term-$$"
 X="szv-extra-$$"
+# 壊れた socket からの自己修復を試すための使い捨て socket 名
+STALE="szv-stale-$$"
+BROKEN="szv-broken-$$"
 DOORBELL_DIR="$TMP_DIR/phase2-doorbell-$$"
 DOORBELL="$DOORBELL_DIR/doorbell"
 FAIL=0
@@ -29,11 +32,17 @@ FAIL=0
 pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1"; FAIL=1; }
 
+# tmux 本体と同じ規則で socket のパスを組む
+socket_path() { echo "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$1"; }
+
 cleanup() {
   tmux -L "$T" kill-server 2>/dev/null
   tmux -L "$X" kill-server 2>/dev/null
   tmux -L "$OUT" kill-server 2>/dev/null
+  tmux -L "$STALE" kill-server 2>/dev/null
+  tmux -L "$BROKEN" kill-server 2>/dev/null
   tmux -L "$IN" kill-server 2>/dev/null
+  rm -f "$(socket_path "$STALE")" "$(socket_path "$BROKEN")"
   rm -rf "$DOORBELL_DIR"
 }
 trap cleanup EXIT
@@ -463,6 +472,57 @@ wait_for "tmux -L $T capture-pane -p -t term:guard 2>/dev/null | grep -q 'GUARD_
 suzu stop >/dev/null
 tmux -L "$OUT" has-session 2>/dev/null \
   && fail "8 の後片付けで外側 server が残っている" || pass "8 の後片付けで外側 server が消えた"
+
+echo "=== 9. 壊れた socket からの自己修復 ==="
+# 任意の socket 名で suzu を実行する (内側は $IN を使い回す)
+suzu_on_socket() {
+  local socket="$1"; shift
+  SUZU_OUTER_SOCKET="$socket" \
+  SUZU_INNER_TMUX="tmux -L $IN" \
+  SUZU_INNER_TMUX_CMD="tmux -L $IN attach -t test1" \
+  SUZU_DOORBELL_FILE="$DOORBELL" \
+    "$SUZU_BIN" "$@" </dev/null
+}
+panes_on() { tmux -L "$1" list-panes -t suzu:0 2>/dev/null | wc -l | tr -d ' '; }
+
+# server プロセスを SIGKILL して socket ファイルだけ残った状態
+tmux -L "$STALE" -f /dev/null new-session -d -s dummy -x 80 -y 24 'exec sh' || fail "使い捨て server の起動"
+kill -9 "$(tmux -L "$STALE" display-message -p '#{pid}')" 2>/dev/null
+wait_for "! tmux -L $STALE has-session 2>/dev/null" || fail "使い捨て server が死なない"
+[ -e "$(socket_path "$STALE")" ] \
+  && pass "SIGKILL 後も socket ファイルが残る" || fail "socket ファイルが残らず前提が崩れている"
+suzu_on_socket "$STALE" start >/dev/null 2>&1
+wait_for "[ \"\$(panes_on $STALE)\" = 2 ]" \
+  && pass "残った socket ファイルがあっても start できる" || fail "残った socket ファイルで start できない"
+suzu_on_socket "$STALE" stop >/dev/null 2>&1
+
+# socket のパスが socket でないファイルで塞がれた状態。
+# tmux はこれを自分で片付けられず "Socket operation on non-socket" で起動に失敗する
+tmux -L "$BROKEN" -f /dev/null new-session -d -s dummy -x 80 -y 24 'exec sh' || fail "使い捨て server の起動"
+kill -9 "$(tmux -L "$BROKEN" display-message -p '#{pid}')" 2>/dev/null
+wait_for "! tmux -L $BROKEN has-session 2>/dev/null" || fail "使い捨て server が死なない"
+rm -f "$(socket_path "$BROKEN")" && : > "$(socket_path "$BROKEN")"
+tmux -L "$BROKEN" -f /dev/null new-session -d -s probe -x 80 -y 24 'exec sh' 2>/dev/null \
+  && fail "前提が崩れている (素の tmux が起動できてしまう)" \
+  || pass "壊れた socket では素の tmux が起動できない"
+
+BROKEN_OUT=$(suzu_on_socket "$BROKEN" start 2>&1)
+echo "$BROKEN_OUT" | grep -q '取り除いて起動し直しました' \
+  && pass "壊れた socket を取り除いた旨を報告する" || fail "自己修復の報告が出ない"
+wait_for "[ \"\$(panes_on $BROKEN)\" = 2 ]" \
+  && pass "壊れた socket を自己修復して額縁を構築できる" || fail "壊れた socket から復旧できない"
+suzu_on_socket "$BROKEN" stop >/dev/null 2>&1
+
+# 修復できない時は tmux の stderr と対処ヒントを添えて失敗する。
+# 中身のあるディレクトリなら suzu の unlink も失敗し、再試行できない状態を作れる
+rm -f "$(socket_path "$BROKEN")"
+mkdir -p "$(socket_path "$BROKEN")/occupied"
+UNFIXABLE=$(suzu_on_socket "$BROKEN" start 2>&1)
+echo "$UNFIXABLE" | grep -q 'Socket operation on non-socket' \
+  && pass "失敗時に tmux の stderr が出る" || fail "tmux の stderr が握りつぶされている"
+echo "$UNFIXABLE" | grep -q 'ps ax | grep' \
+  && pass "失敗時に残骸の調べ方を案内する" || fail "対処ヒントが出ない"
+rmdir "$(socket_path "$BROKEN")/occupied" "$(socket_path "$BROKEN")" 2>/dev/null
 
 echo
 if [ "$FAIL" = 0 ]; then

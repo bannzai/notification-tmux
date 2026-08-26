@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -59,9 +61,34 @@ func (c Config) outerCommand(args ...string) *exec.Cmd {
 	return cmd
 }
 
+// tmux は失敗の理由を stderr にしか出さない ("server exited unexpectedly" 等)。
+// exit status だけを包むと原因が消えるため、必ず stderr を載せて返す
 func output(cmd *exec.Cmd) (string, error) {
 	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return string(out), withDetail(err, string(exitErr.Stderr))
+		}
+	}
 	return string(out), err
+}
+
+func runTmux(cmd *exec.Cmd) error {
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return withDetail(err, stderr.String())
+	}
+	return nil
+}
+
+func withDetail(err error, stderr string) error {
+	detail := strings.TrimSpace(stderr)
+	if detail == "" {
+		return err
+	}
+	return fmt.Errorf("%w (%s)", err, strings.ReplaceAll(detail, "\n", " / "))
 }
 
 func fetchNotifications(cfg Config) notificationsMsg {
@@ -158,7 +185,7 @@ func jump(cfg Config, n Notification) error {
 	if err != nil {
 		return err
 	}
-	if err := cfg.innerCommand("select-window", "-t", n.WindowID).Run(); err != nil {
+	if err := runTmux(cfg.innerCommand("select-window", "-t", n.WindowID)); err != nil {
 		return fmt.Errorf("select-window に失敗: %w", err)
 	}
 	out, err := output(cfg.innerCommand("list-clients", "-F", clientFormat))
@@ -169,7 +196,7 @@ func jump(cfg Config, n Notification) error {
 	if client == "" {
 		return fmt.Errorf("内側 tmux の実 client が見つかりません")
 	}
-	if err := cfg.innerCommand("switch-client", "-c", client, "-t", n.Session).Run(); err != nil {
+	if err := runTmux(cfg.innerCommand("switch-client", "-c", client, "-t", n.Session)); err != nil {
 		return fmt.Errorf("switch-client に失敗: %w", err)
 	}
 	return nil
@@ -212,7 +239,7 @@ func focusInner(cfg Config) error {
 }
 
 func focusPane(cfg Config, paneID string) error {
-	if err := cfg.outerCommand("select-pane", "-t", paneID).Run(); err != nil {
+	if err := runTmux(cfg.outerCommand("select-pane", "-t", paneID)); err != nil {
 		return fmt.Errorf("select-pane に失敗: %w", err)
 	}
 	return nil

@@ -107,7 +107,7 @@ func openSidebar(cfg Config) error {
 		return fmt.Errorf("サイドバー pane の作成に失敗: %w", err)
 	}
 	paneID := firstLine(out)
-	if err := cfg.outerCommand("set-option", "-p", "-t", paneID, sidebarPaneOption, "1").Run(); err != nil {
+	if err := runTmux(cfg.outerCommand("set-option", "-p", "-t", paneID, sidebarPaneOption, "1")); err != nil {
 		return fmt.Errorf("サイドバー pane の目印付けに失敗: %w", err)
 	}
 	return nil
@@ -137,21 +137,65 @@ func installDoorbellHook(cfg Config) {
 		"run-shell -b "+shellQuote("touch "+shellQuote(cfg.DoorbellFile))).Run()
 }
 
+// tmux が socket を置く場所。tmux 本体と同じ規則 ($TMUX_TMPDIR 既定 /tmp の下の tmux-<uid>) で解決する
+func outerSocketPath(cfg Config) string {
+	dir := os.Getenv("TMUX_TMPDIR")
+	if dir == "" {
+		dir = "/tmp"
+	}
+	return filepath.Join(dir, fmt.Sprintf("tmux-%d", os.Getuid()), cfg.OuterSocket)
+}
+
+// 外側 server を起こす。socket のパスに壊れた残骸が居座っていると tmux は
+// 「接続失敗 → 自分で server を fork → 残骸と衝突して即死」を繰り返して起動できないため、
+// 残骸を退けて 1 回だけやり直す。
+//
+// 消してよい理由: 外側はステートレス (保存すべき状態が無い) なので socket ファイルに
+// 守るべきものは無く、ここへ来るのは has-session も new-session も失敗した後、
+// つまりその socket 経由では外側 session を作れないと分かっている場合だけ。
+// 生きた server がその socket を持っていれば new-session は成功しており、この分岐には入らない
+func startOuterServer(cfg Config) error {
+	// -f は server 起動時のみ効くため、server を生む new-session に付ける
+	newSession := func() *exec.Cmd {
+		return cfg.outerCommand("-f", "/dev/null", "new-session", "-d", "-s", outerSession,
+			"-x", strconv.Itoa(outerInitialWidth), "-y", strconv.Itoa(outerInitialHeight),
+			"TMUX= "+cfg.InnerAttach)
+	}
+	err := runTmux(newSession())
+	if err == nil {
+		return nil
+	}
+	path := outerSocketPath(cfg)
+	if _, statErr := os.Stat(path); statErr != nil {
+		return startFailure(cfg, err)
+	}
+	if removeErr := os.Remove(path); removeErr != nil {
+		return startFailure(cfg, err)
+	}
+	if retryErr := runTmux(newSession()); retryErr != nil {
+		return startFailure(cfg, retryErr)
+	}
+	fmt.Fprintf(os.Stderr, "壊れた socket (%s) を取り除いて起動し直しました\n", path)
+	return nil
+}
+
+func startFailure(cfg Config, err error) error {
+	return fmt.Errorf("外側 tmux の起動に失敗: %w\n"+
+		"  外側 server の残骸が残っている可能性があります。"+
+		"`ps ax | grep \"tmux -L %s\"` で確認して kill してください", err, cfg.OuterSocket)
+}
+
 func cmdStart(cfg Config) error {
 	interactive := isTerminal(os.Stdin)
 	if interactive && os.Getenv("TMUX") != "" {
 		return fmt.Errorf("tmux の中から start しないでください (外側が二重にネストします)。新しいターミナル pane から実行してください")
 	}
 	if !outerExists(cfg) {
-		// -f は server 起動時のみ効くため、server を生む new-session に付ける
-		newSession := cfg.outerCommand("-f", "/dev/null", "new-session", "-d", "-s", outerSession,
-			"-x", strconv.Itoa(outerInitialWidth), "-y", strconv.Itoa(outerInitialHeight),
-			"TMUX= "+cfg.InnerAttach)
-		if err := newSession.Run(); err != nil {
-			return fmt.Errorf("外側 tmux の起動に失敗: %w", err)
+		if err := startOuterServer(cfg); err != nil {
+			return err
 		}
 		for _, option := range outerOptions {
-			if err := cfg.outerCommand("set-option", "-g", option.name, option.value).Run(); err != nil {
+			if err := runTmux(cfg.outerCommand("set-option", "-g", option.name, option.value)); err != nil {
 				return fmt.Errorf("外側の %s 設定に失敗: %w", option.name, err)
 			}
 		}
@@ -186,7 +230,7 @@ func cmdToggle(cfg Config) error {
 	}
 	if paneID := sidebarPaneID(cfg); paneID != "" {
 		// 閉じた後のフォーカスは、残った内側 pane へ tmux が自然に移す
-		if err := cfg.outerCommand("kill-pane", "-t", paneID).Run(); err != nil {
+		if err := runTmux(cfg.outerCommand("kill-pane", "-t", paneID)); err != nil {
 			return fmt.Errorf("サイドバーを閉じられません: %w", err)
 		}
 		return nil
@@ -248,7 +292,7 @@ func cmdStop(cfg Config) error {
 		fmt.Printf("外側 tmux (socket: %s): 未起動\n", cfg.OuterSocket)
 		return nil
 	}
-	if err := cfg.outerCommand("kill-server").Run(); err != nil {
+	if err := runTmux(cfg.outerCommand("kill-server")); err != nil {
 		return fmt.Errorf("外側 tmux の停止に失敗: %w", err)
 	}
 	fmt.Printf("外側 tmux (socket: %s) を停止しました (内側 tmux には触れていません)\n", cfg.OuterSocket)
