@@ -57,6 +57,11 @@ sidebar_shows() {
   wait_for "tmux -L $OUT capture-pane -p -t \"\$(sidebar_pane)\" 2>/dev/null | grep -qF -- '$1'"
 }
 
+# サイドバー pane の描画から pattern が消えるまで待つ
+sidebar_hides() {
+  wait_for "! tmux -L $OUT capture-pane -p -t \"\$(sidebar_pane)\" 2>/dev/null | grep -qF -- '$1'"
+}
+
 active_pane_is_sidebar() {
   [ "$(tmux -L "$OUT" list-panes -t noroshi:0 -f '#{pane_active}' -F '#{@noroshi-sidebar}')" = 1 ]
 }
@@ -64,6 +69,10 @@ active_pane_is_sidebar() {
 # 指定 tty に繋がった内側 client の session。実 client が複数あるため tty で特定する
 client_session_of_tty() {
   tmux -L "$IN" list-clients -f "#{==:#{client_tty},$1}" -F '#{client_session}' 2>/dev/null | head -1
+}
+
+client_name_of_tty() {
+  tmux -L "$IN" list-clients -f "#{==:#{client_tty},$1}" -F '#{client_name}' 2>/dev/null | head -1
 }
 
 # 外側の右 pane (= 内側へ attach している pane) の tty
@@ -121,9 +130,11 @@ inner_hook_installed \
 
 echo "=== 4. 非 attach session (test2) の通知が push で届く ==="
 tmux -L "$IN" set-option -t test2:0.0 -p @claude-waiting '🔔09:00' || fail "@claude-waiting の set"
-sidebar_shows 'test2:0 claude-work' \
-  && pass "非 attach session の通知行が出る (cross-session の push 経路)" \
-  || fail "非 attach session の通知行が出ない"
+sidebar_shows '▸ test2 (1)' \
+  && pass "非 attach session の見出しが出る (cross-session の push 経路)" \
+  || fail "非 attach session の見出しが出ない"
+sidebar_shows 'claude-work' \
+  && pass "見出しの配下に window 行が出る" || fail "window 行が出ない"
 sidebar_shows '🔔' && pass "アイコンが描画される" || fail "アイコンが描画されない"
 sidebar_shows 'Noroshi 🔔1' && pass "件数表示が 1" || fail "件数表示が 1 にならない"
 sidebar_shows 'PREVIEW_TEST2_MARKER' \
@@ -186,6 +197,40 @@ sidebar_shows 'INNER_READY_MARKER' \
   && pass "k で選択を戻すとプレビューも戻る" || fail "k でプレビューが戻らない"
 tmux -L "$T" send-keys -t term:0.0 q
 wait_for "! active_pane_is_sidebar" || fail "プレビュー検証後のフォーカス復帰"
+
+echo "=== 5d. session 見出しの階層表示とフィルタリング ==="
+sidebar_shows '▸ test1' \
+  && pass "2 session に通知がある時は見出しが 2 つ並ぶ" || fail "session 見出しが 2 つ並ばない"
+
+# ジャンプの検証を意味のあるものにするため、右 pane を一度 test1 へ戻しておく
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test1 ]" \
+  || fail "右 pane の client を test1 へ戻せない"
+
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "active_pane_is_sidebar" || fail "フィルタ検証のためのフォーカス移動"
+tmux -L "$T" send-keys -l -t term:0.0 '/'
+tmux -L "$T" send-keys -l -t term:0.0 'claude'
+sidebar_shows 'filter: claude_' \
+  && pass "/ で入力モードに入りクエリが編集中と分かる" || fail "入力中のクエリが表示されない"
+
+tmux -L "$T" send-keys -t term:0.0 Enter
+sidebar_hides '▸ test1' \
+  && pass "確定で一致しない session のグループが消える" || fail "一致しない session が残る"
+sidebar_shows '▸ test2 (1)' \
+  && pass "一致した session のグループは残る" || fail "一致した session まで消えた"
+
+tmux -L "$T" send-keys -t term:0.0 Enter
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test2 ]" \
+  && pass "フィルタ確定後の Enter で一致 window へジャンプ" || fail "フィルタ後にジャンプできない"
+
+tmux -L "$T" send-keys -t term:0.0 Escape
+sidebar_shows '▸ test1' \
+  && pass "Esc でフィルタが解除され全件に戻る" || fail "Esc でフィルタが解除されない"
+sidebar_hides 'filter:' && pass "解除でフィルタ行が消える" || fail "フィルタ行が残っている"
+
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "フィルタ検証後のフォーカス復帰"
 tmux -L "$IN" set-option -t test1:0.0 -pu @claude-waiting || fail "2 件目の @claude-waiting の解除"
 
 echo "=== 6. 通知の解除 ==="
