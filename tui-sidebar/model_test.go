@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -68,6 +69,35 @@ func TestQuitKeysReturnFocus(t *testing.T) {
 	}
 	if _, cmd := pressKeys(testModel(), tea.KeyMsg{Type: tea.KeyEsc}); cmd == nil {
 		t.Error("Esc でフォーカスが返らない")
+	}
+}
+
+func TestPreviewIsDiscardedWhenSelectionMoved(t *testing.T) {
+	m := testModel()
+	m.items = []Notification{{WindowID: "@1", PaneID: "%1"}, {WindowID: "@2", PaneID: "%2"}}
+
+	updated, _ := m.Update(previewMsg{paneID: "%2", lines: []string{"古い選択の結果"}})
+	if got := updated.(model).preview; got != nil {
+		t.Errorf("選択外の pane のプレビューを取り込んでいる: %q", got)
+	}
+
+	updated, _ = m.Update(previewMsg{paneID: "%1", lines: []string{"選択中の結果"}})
+	if got := updated.(model).preview; len(got) != 1 || got[0] != "選択中の結果" {
+		t.Errorf("選択中 pane のプレビューが入っていない: %q", got)
+	}
+}
+
+func TestViewRendersPreview(t *testing.T) {
+	m := testModel()
+	m.items = []Notification{{Session: "test2", WindowIndex: "0", WindowName: "claude-work", PaneID: "%1", Icon: "🔔"}}
+	m.preview = []string{"PREVIEW_MARKER"}
+
+	if !strings.Contains(m.View(), "PREVIEW_MARKER") {
+		t.Error("プレビューが描画されていない")
+	}
+	m.preview = nil
+	if strings.Contains(m.View(), "─────") {
+		t.Error("プレビューが無いのに区切り線が出ている")
 	}
 }
 

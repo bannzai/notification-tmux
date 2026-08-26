@@ -90,8 +90,9 @@ fi
 echo "=== 2. 内側 (代役) server を隔離 socket で起動 (test1 / test2) ==="
 tmux -L "$IN" -f /dev/null new-session -d -s test1 -x 200 -y 50 \
   'echo INNER_READY_MARKER; exec sh' || fail "内側 session test1 の起動"
-tmux -L "$IN" new-session -d -s test2 -n claude-work -x 200 -y 50 'exec sh' \
-  || fail "内側 session test2 の起動"
+# pane プレビューの検証用に、session ごとに違うマーカーを画面へ出しておく
+tmux -L "$IN" new-session -d -s test2 -n claude-work -x 200 -y 50 \
+  'echo PREVIEW_TEST2_MARKER; exec sh' || fail "内側 session test2 の起動"
 wait_for "tmux -L $IN capture-pane -p -t test1:0.0 2>/dev/null | grep -q INNER_READY_MARKER" \
   && pass "内側 server 起動 (test1 / test2)" || fail "内側 server 起動"
 
@@ -125,6 +126,8 @@ sidebar_shows 'test2:0 claude-work' \
   || fail "非 attach session の通知行が出ない"
 sidebar_shows '🔔' && pass "アイコンが描画される" || fail "アイコンが描画されない"
 sidebar_shows 'Noroshi 🔔1' && pass "件数表示が 1" || fail "件数表示が 1 にならない"
+sidebar_shows 'PREVIEW_TEST2_MARKER' \
+  && pass "選択中通知の pane プレビューが出る" || fail "pane プレビューが出ない"
 
 echo "=== 5. 実キー経路: prefix+N でサイドバーへ → Enter でジャンプ ==="
 tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y 60 \
@@ -143,20 +146,20 @@ wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test2 ]" \
 [ "$(client_session_of_tty "$EXTRA_TTY")" = test1 ] \
   && pass "余分な実 client は test1 のまま (右 pane 以外を切り替えない)" \
   || fail "右 pane 以外の client を切り替えてしまった"
-wait_for "! active_pane_is_sidebar" \
-  && pass "ジャンプ後にフォーカスが内側 pane へ戻る" || fail "ジャンプ後にフォーカスが戻らない"
+# ジャンプは window を切り替えるだけ。右へ移るのは明示操作のみにする
+sleep 1
+active_pane_is_sidebar \
+  && pass "ジャンプ後もフォーカスはサイドバーに留まる" || fail "ジャンプ後にフォーカスが右へ移った"
 
 echo "=== 5b. サイドバーからも prefix+N で右 pane へ戻る ==="
-tmux -L "$T" send-keys -t term:0.0 C-b N
-wait_for "active_pane_is_sidebar" \
-  && pass "再度 prefix+N でサイドバーへ移る" || fail "再度 prefix+N でサイドバーへ移らない"
 # 同じ prefix+N が往復のトグルになる (内側は注入バインド、サイドバーは TUI 側のキー処理)
 tmux -L "$T" send-keys -t term:0.0 C-b N
 wait_for "! active_pane_is_sidebar" \
   && pass "サイドバーで prefix+N を押すと内側 pane へ戻る" || fail "サイドバーの prefix+N で戻らない"
 
 tmux -L "$T" send-keys -t term:0.0 C-b N
-wait_for "active_pane_is_sidebar" || fail "3 度目の prefix+N でサイドバーへ移らない"
+wait_for "active_pane_is_sidebar" \
+  && pass "再度 prefix+N でサイドバーへ移る" || fail "再度 prefix+N でサイドバーへ移らない"
 tmux -L "$T" send-keys -t term:0.0 x
 sleep 1
 active_pane_is_sidebar \
@@ -164,6 +167,26 @@ active_pane_is_sidebar \
 tmux -L "$T" send-keys -t term:0.0 q
 wait_for "! active_pane_is_sidebar" \
   && pass "q で内側 pane へ戻る" || fail "q で戻らない"
+
+echo "=== 5c. j/k で選択を移すとプレビューも切り替わる ==="
+# 2 件目 (test1) を足す。list-panes -a は session 順なので test1 がカーソル 0 に来る
+tmux -L "$IN" set-option -t test1:0.0 -p @claude-waiting '🔔09:30' || fail "2 件目の @claude-waiting の set"
+sidebar_shows 'Noroshi 🔔2' && pass "件数表示が 2" || fail "件数表示が 2 にならない"
+sidebar_shows 'INNER_READY_MARKER' \
+  && pass "カーソル 0 (test1) のプレビューに切り替わる" || fail "カーソル 0 のプレビューが切り替わらない"
+
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "active_pane_is_sidebar" || fail "プレビュー検証のためのフォーカス移動"
+tmux -L "$T" send-keys -t term:0.0 j
+sidebar_shows 'PREVIEW_TEST2_MARKER' \
+  && pass "j で選択を下げるとプレビューが test2 の pane に変わる" \
+  || fail "j でプレビューが切り替わらない"
+tmux -L "$T" send-keys -t term:0.0 k
+sidebar_shows 'INNER_READY_MARKER' \
+  && pass "k で選択を戻すとプレビューも戻る" || fail "k でプレビューが戻らない"
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "プレビュー検証後のフォーカス復帰"
+tmux -L "$IN" set-option -t test1:0.0 -pu @claude-waiting || fail "2 件目の @claude-waiting の解除"
 
 echo "=== 6. 通知の解除 ==="
 tmux -L "$IN" set-option -t test2:0.0 -pu @claude-waiting || fail "@claude-waiting の解除"

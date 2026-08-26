@@ -73,6 +73,49 @@ func TestParseRealClientNone(t *testing.T) {
 	}
 }
 
+func TestPreviewLinesTakesTailIgnoringBlanks(t *testing.T) {
+	// capture-pane は pane の高さぶん出るため、下は空行で埋まる
+	out := "one\n\ntwo\nthree   \n\n   \n\n"
+
+	got := previewLines(out, 10)
+	want := []string{"one", "two", "three"}
+	if len(got) != len(want) {
+		t.Fatalf("空行が落ちていない: %q", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("%d 行目 = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func TestPreviewLinesLimitsToTail(t *testing.T) {
+	out := "l1\nl2\nl3\nl4\nl5\n"
+
+	got := previewLines(out, 3)
+	if len(got) != 3 || got[0] != "l3" || got[2] != "l5" {
+		t.Fatalf("末尾 3 行になっていない: %q", got)
+	}
+}
+
+func TestPreviewLinesEmpty(t *testing.T) {
+	if got := previewLines("\n \n\t\n", 10); got != nil {
+		t.Fatalf("空行だけの出力でプレビューが生えた: %q", got)
+	}
+}
+
+func TestTruncateByWidth(t *testing.T) {
+	if got := truncate("abcdefghij", 4); got != "abcd" {
+		t.Errorf("truncate = %q, want %q", got, "abcd")
+	}
+	if got := truncate("あいうえお", 3); got != "あいう" {
+		t.Errorf("マルチバイトが rune 単位で切れていない: %q", got)
+	}
+	if got := truncate("abc", 10); got != "abc" {
+		t.Errorf("幅内の文字列が変わった: %q", got)
+	}
+}
+
 func TestParseInnerPane(t *testing.T) {
 	pane, ok := parseInnerPane("%4\t/dev/ttys004\n")
 	if !ok || pane.ID != "%4" || pane.TTY != "/dev/ttys004" {

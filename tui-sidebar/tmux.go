@@ -151,7 +151,8 @@ func fetchInnerPane(cfg Config) (innerPane, error) {
 	return pane, nil
 }
 
-// 通知の window を内側で表示し、フォーカスを内側 pane へ返す
+// 通知の window を内側で表示する。フォーカスはサイドバーに残し、右 pane へ移るのは
+// prefix + jump key / q / Esc の明示操作だけにする
 func jump(cfg Config, n Notification) error {
 	pane, err := fetchInnerPane(cfg)
 	if err != nil {
@@ -171,7 +172,34 @@ func jump(cfg Config, n Notification) error {
 	if err := cfg.innerCommand("switch-client", "-c", client, "-t", n.Session).Run(); err != nil {
 		return fmt.Errorf("switch-client に失敗: %w", err)
 	}
-	return focusPane(cfg, pane.ID)
+	return nil
+}
+
+// 選択中の通知が出ている pane の見た目を、カーソル移動と一覧更新の時だけ取りに行く。
+// pane が消えている等で失敗したらプレビューを畳むだけにして、サイドバーは動かし続ける
+func fetchPreview(cfg Config, paneID string, limit int) []string {
+	out, err := output(cfg.innerCommand("capture-pane", "-p", "-t", paneID))
+	if err != nil {
+		return nil
+	}
+	return previewLines(out, limit)
+}
+
+// pane の下半分は空行で埋まっているのが普通なので、空行を落としてから末尾を取る。
+// 幅の狭いサイドバーでは行数を情報のある行だけに使いたい
+func previewLines(out string, limit int) []string {
+	var lines []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimRight(line, " \t\r")
+		if line == "" {
+			continue
+		}
+		lines = append(lines, line)
+	}
+	if len(lines) > limit {
+		lines = lines[len(lines)-limit:]
+	}
+	return lines
 }
 
 // 外側 tmux のフォーカスをサイドバーでない pane (= 内側 attach) へ移す
