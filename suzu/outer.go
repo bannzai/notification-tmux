@@ -113,28 +113,88 @@ func openSidebar(cfg Config) error {
 	return nil
 }
 
+// suzu が注入した bind の所有マーカー。run-shell へ渡すコマンド行は必ず
+// exportedEnv() で始まり、その先頭にこの代入が入る。
+// stop でユーザー自身の bind を巻き込んで消さないための目印にする
+const injectedKeyMarker = "SUZU_OUTER_SOCKET"
+
 // 内側 tmux へ「サイドバーへフォーカス」「サイドバーの表示/非表示」を注入する
 // (メモリ上のみ・冪等)。内側 server が起動していない場合は何もしない。
-// run-shell に渡すのは実行中バイナリの絶対パスなので、インストール場所に依存しない
+// run-shell に渡すのは実行中バイナリの絶対パスなので、インストール場所に依存しない。
+// どちらのバインドも exportedEnv() を焼き込む: focus も toggle も閉じたサイドバーを
+// 作り直すことがあり、その pane に全設定が要る
 func installInnerKeys(cfg Config) {
-	exe := shellQuote(executablePath())
-	cfg.innerCommand("bind-key", cfg.JumpKey, "run-shell",
-		"SUZU_OUTER_SOCKET="+shellQuote(cfg.OuterSocket)+" "+exe+" focus sidebar").Run()
-	// toggle は閉じたサイドバーを作り直すため、pane に渡す env も揃えて焼き込む
-	cfg.innerCommand("bind-key", cfg.ToggleKey, "run-shell",
-		cfg.exportedEnv()+" "+exe+" toggle").Run()
+	bind := func(key, subcommand string) {
+		warnKeyOverride(cfg, key)
+		cfg.innerCommand("bind-key", key, "run-shell",
+			cfg.exportedEnv()+" "+shellQuote(executablePath())+" "+subcommand).Run()
+	}
+	bind(cfg.JumpKey, "focus sidebar")
+	bind(cfg.ToggleKey, "toggle")
+}
+
+// キーは env で変更できるため、ユーザー自身の bind とぶつかり得る。
+// 上書きは行うが、黙って奪わないよう知らせる
+func warnKeyOverride(cfg Config, key string) {
+	out, err := output(cfg.innerCommand("list-keys", "-T", "prefix", key))
+	if err != nil || strings.Contains(out, injectedKeyMarker) {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "内側 tmux の prefix+%s には既存の bind があります。suzu のバインドで上書きします: %s\n",
+		key, strings.TrimSpace(out))
+}
+
+// 自分が注入した bind の時だけ解除する
+func unbindInjectedKey(cfg Config, key string) {
+	out, err := output(cfg.innerCommand("list-keys", "-T", "prefix", key))
+	if err != nil || !strings.Contains(out, injectedKeyMarker) {
+		return
+	}
+	cfg.innerCommand("unbind-key", key).Run()
 }
 
 // 内側 tmux の「どこかで set-option された」を doorbell ファイルへ伝える hook を注入する
 // (メモリ上のみ・冪等)。control mode の購読は attach 中 session の pane に限られるため、
 // 別 session の @claude-waiting を拾う経路はこの global hook が担う。
-// hook 内で set-option すると再帰発火するため touch しか行わない
+// hook 内で set-option すると再帰発火するため touch しか行わない。
+// -g (置換) ではなく -ga (配列への追記) を使い、ユーザー自身の
+// after-set-option hook を消さないようにする
 func installDoorbellHook(cfg Config) {
 	if err := os.MkdirAll(filepath.Dir(cfg.DoorbellFile), 0o755); err != nil {
 		return
 	}
-	cfg.innerCommand("set-hook", "-g", "after-set-option",
+	if len(doorbellHookTargets(cfg)) > 0 {
+		return
+	}
+	cfg.innerCommand("set-hook", "-ga", "after-set-option",
 		"run-shell -b "+shellQuote("touch "+shellQuote(cfg.DoorbellFile))).Run()
+}
+
+func doorbellHookTargets(cfg Config) []string {
+	out, err := output(cfg.innerCommand("show-hooks", "-g", "after-set-option"))
+	if err != nil {
+		return nil
+	}
+	return parseDoorbellHookTargets(out, cfg.DoorbellFile)
+}
+
+// show-hooks の出力から、doorbell ファイルを touch する自分のエントリだけを拾い、
+// set-hook -gu へ渡せる target 表記で返す。
+// tmux 3.6 は値の入った hook を配列表記 (after-set-option[0] <command>) で出し、
+// 未設定なら名前だけの行になる。添字を持たない単独エントリ表記の版もあるため両方受ける。
+// 添字は解除しても振り直されないため、複数拾っても順に解除してよい
+func parseDoorbellHookTargets(out string, doorbellFile string) []string {
+	var targets []string
+	for _, line := range strings.Split(out, "\n") {
+		name, command, found := strings.Cut(strings.TrimSpace(line), " ")
+		if !found || !strings.HasPrefix(name, "after-set-option") {
+			continue
+		}
+		if strings.Contains(command, doorbellFile) {
+			targets = append(targets, name)
+		}
+	}
+	return targets
 }
 
 // tmux が socket を置く場所。tmux 本体と同じ規則 ($TMUX_TMPDIR 既定 /tmp の下の tmux-<uid>) で解決する
@@ -151,32 +211,40 @@ func outerSocketPath(cfg Config) string {
 // 残骸を退けて 1 回だけやり直す。
 //
 // 消してよい理由: 外側はステートレス (保存すべき状態が無い) なので socket ファイルに
-// 守るべきものは無く、ここへ来るのは has-session も new-session も失敗した後、
+// 守るべきものは無く、ここへ来るのは has-session も new-session も失敗し、
+// さらに outerExists の再確認でも session が見つからなかった後、
 // つまりその socket 経由では外側 session を作れないと分かっている場合だけ。
-// 生きた server がその socket を持っていれば new-session は成功しており、この分岐には入らない
-func startOuterServer(cfg Config) error {
+//
+// 返り値の created は「この呼び出しが session を作った」かどうか。
+// 初期化に失敗した時、自分が作った時だけ片付けるために呼び出し側が使う
+func startOuterServer(cfg Config) (created bool, err error) {
 	// -f は server 起動時のみ効くため、server を生む new-session に付ける
 	newSession := func() *exec.Cmd {
 		return cfg.outerCommand("-f", "/dev/null", "new-session", "-d", "-s", outerSession,
 			"-x", strconv.Itoa(outerInitialWidth), "-y", strconv.Itoa(outerInitialHeight),
 			"TMUX= "+cfg.InnerAttach)
 	}
-	err := runTmux(newSession())
+	err = runTmux(newSession())
 	if err == nil {
-		return nil
+		return true, nil
+	}
+	// 2 つの start が同時に走ると、後発の new-session は session 名の重複で失敗する。
+	// 生きている server の socket を残骸と誤認して消さないよう、先に存在を確かめる
+	if outerExists(cfg) {
+		return false, nil
 	}
 	path := outerSocketPath(cfg)
 	if _, statErr := os.Stat(path); statErr != nil {
-		return startFailure(cfg, err)
+		return false, startFailure(cfg, err)
 	}
 	if removeErr := os.Remove(path); removeErr != nil {
-		return startFailure(cfg, err)
+		return false, startFailure(cfg, err)
 	}
 	if retryErr := runTmux(newSession()); retryErr != nil {
-		return startFailure(cfg, retryErr)
+		return false, startFailure(cfg, retryErr)
 	}
 	fmt.Fprintf(os.Stderr, "壊れた socket (%s) を取り除いて起動し直しました\n", path)
-	return nil
+	return true, nil
 }
 
 func startFailure(cfg Config, err error) error {
@@ -185,23 +253,65 @@ func startFailure(cfg Config, err error) error {
 		"`ps ax | grep \"tmux -L %s\"` で確認して kill してください", err, cfg.OuterSocket)
 }
 
+// 外側 server を額縁として仕立てる (設定 + サイドバー)
+func initializeOuter(cfg Config) error {
+	for _, option := range outerOptions {
+		if err := runTmux(cfg.outerCommand("set-option", "-g", option.name, option.value)); err != nil {
+			return fmt.Errorf("外側の %s 設定に失敗: %w", option.name, err)
+		}
+	}
+	return openSidebar(cfg)
+}
+
+// 内側 tmux で detach すると右 pane の attach プロセスが終わって pane だけが消えるが、
+// サイドバーが残るため額縁自体は生きている。次の start で右 pane を作り直す。
+// サイドバーが無い時 (toggle で閉じた状態) は触らない
+func restoreInnerPane(cfg Config) error {
+	if _, err := fetchInnerPane(cfg); err == nil {
+		return nil
+	}
+	sidebar := sidebarPaneID(cfg)
+	if sidebar == "" {
+		return nil
+	}
+	if err := runTmux(cfg.outerCommand("split-window", "-h", "-d", "-t", outerWindow,
+		"TMUX= "+cfg.InnerAttach)); err != nil {
+		return fmt.Errorf("内側 pane の再作成に失敗: %w", err)
+	}
+	// split はサイドバーを半分に割って作るため、幅を設定値へ戻す
+	if err := runTmux(cfg.outerCommand("resize-pane", "-t", sidebar,
+		"-x", strconv.Itoa(cfg.SidebarWidth))); err != nil {
+		return fmt.Errorf("サイドバー幅の復元に失敗: %w", err)
+	}
+	return nil
+}
+
+// kill-server は同じ socket に相乗りした無関係な session まで巻き込むため、
+// 自分の session だけを止める (suzu が最後の 1 つなら server ごと終わる)
+func killOuterSession(cfg Config) error {
+	return runTmux(cfg.outerCommand("kill-session", "-t", outerSession))
+}
+
 func cmdStart(cfg Config) error {
 	interactive := isTerminal(os.Stdin)
 	if interactive && os.Getenv("TMUX") != "" {
 		return fmt.Errorf("tmux の中から start しないでください (外側が二重にネストします)。新しいターミナル pane から実行してください")
 	}
 	if !outerExists(cfg) {
-		if err := startOuterServer(cfg); err != nil {
+		created, err := startOuterServer(cfg)
+		if err != nil {
 			return err
 		}
-		for _, option := range outerOptions {
-			if err := runTmux(cfg.outerCommand("set-option", "-g", option.name, option.value)); err != nil {
-				return fmt.Errorf("外側の %s 設定に失敗: %w", option.name, err)
+		if err := initializeOuter(cfg); err != nil {
+			if created {
+				// 初期化に失敗した session を残すと、次の start が構築済みと誤認して
+				// 未初期化の額縁へ attach してしまう
+				killOuterSession(cfg)
 			}
-		}
-		if err := openSidebar(cfg); err != nil {
 			return err
 		}
+	} else if err := restoreInnerPane(cfg); err != nil {
+		return err
 	}
 	installInnerKeys(cfg)
 	installDoorbellHook(cfg)
@@ -284,15 +394,18 @@ func cmdStatus(cfg Config) error {
 }
 
 func cmdStop(cfg Config) error {
-	// 注入したキーバインドと hook の解除は外側の有無に関わらず行う (冪等)
-	cfg.innerCommand("unbind-key", cfg.JumpKey).Run()
-	cfg.innerCommand("unbind-key", cfg.ToggleKey).Run()
-	cfg.innerCommand("set-hook", "-gu", "after-set-option").Run()
+	// 注入したキーバインドと hook の解除は外側の有無に関わらず行う (冪等)。
+	// どちらも「自分が入れたもの」だけを狙って外し、ユーザー自身の bind・hook は残す
+	unbindInjectedKey(cfg, cfg.JumpKey)
+	unbindInjectedKey(cfg, cfg.ToggleKey)
+	for _, target := range doorbellHookTargets(cfg) {
+		cfg.innerCommand("set-hook", "-gu", target).Run()
+	}
 	if !outerExists(cfg) {
 		fmt.Printf("外側 tmux (socket: %s): 未起動\n", cfg.OuterSocket)
 		return nil
 	}
-	if err := runTmux(cfg.outerCommand("kill-server")); err != nil {
+	if err := killOuterSession(cfg); err != nil {
 		return fmt.Errorf("外側 tmux の停止に失敗: %w", err)
 	}
 	fmt.Printf("外側 tmux (socket: %s) を停止しました (内側 tmux には触れていません)\n", cfg.OuterSocket)

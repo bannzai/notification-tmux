@@ -1,42 +1,146 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// tmux の -F 出力の 1 行を組み立てる。区切りは \x1f なので、値にタブが入っても崩れない
+func tmuxLine(fields ...string) string {
+	return strings.Join(fields, fieldSeparator) + "\n"
+}
+
+// pane ローカルの @claude-waiting を引く tmux 呼び出しの代役
+func paneOptions(values map[string]string) func(string) string {
+	return func(paneID string) string { return values[paneID] }
+}
 
 func TestParseNotificationsDedupesByWindow(t *testing.T) {
 	// -p と -w の両方に set されると同じ window が 2 行で出てくる
-	out := "main\t@3\t0\tclaude-work\t%7\t🔔09:00\n" +
-		"main\t@3\t0\tclaude-work\t%8\t🔔09:01\n" +
-		"other\t@9\t2\tbuild\t%12\t🔔10:00\n"
+	out := tmuxLine("main", "$0", "@3", "0", "claude-work", "%7", "🔔09:00") +
+		tmuxLine("main", "$0", "@3", "0", "claude-work", "%8", "🔔09:01") +
+		tmuxLine("other", "$1", "@9", "2", "build", "%12", "🔔10:00")
 
-	items := parseNotifications(out)
+	items := parseNotifications(out, paneOptions(nil))
 	if len(items) != 2 {
 		t.Fatalf("window 単位に畳まれていない: %+v", items)
 	}
+	// pane ローカルの値がどこにも無い時は従来どおり先頭を代表にする
 	if items[0].WindowID != "@3" || items[0].Icon != "🔔09:00" || items[0].PaneID != "%7" {
 		t.Errorf("最初の行が代表になっていない: %+v", items[0])
 	}
-	if items[1].Session != "other" || items[1].WindowIndex != "2" || items[1].WindowName != "build" {
+	if items[1].Session != "other" || items[1].SessionID != "$1" ||
+		items[1].WindowIndex != "2" || items[1].WindowName != "build" {
 		t.Errorf("2 件目のパースが誤り: %+v", items[1])
 	}
 }
 
-func TestParseNotificationsSkipsBrokenLines(t *testing.T) {
-	out := "\nmain\t@3\n\t\t\t\t\t\nmain\t@4\t1\tweb\t%2\t🔔\n"
+func TestParseNotificationsPrefersOriginPane(t *testing.T) {
+	// 複数 pane の window では window option の継承で全 pane が候補に挙がる。
+	// pane ローカルに値がある %8 が通知元
+	out := tmuxLine("main", "$0", "@3", "0", "claude-work", "%7", "🔔09:00") +
+		tmuxLine("main", "$0", "@3", "0", "claude-work", "%8", "🔔09:00") +
+		tmuxLine("main", "$0", "@3", "0", "claude-work", "%9", "🔔09:00")
 
-	items := parseNotifications(out)
+	items := parseNotifications(out, paneOptions(map[string]string{"%8": "🔔09:00"}))
+	if len(items) != 1 || items[0].PaneID != "%8" {
+		t.Fatalf("通知元 pane が代表になっていない: %+v", items)
+	}
+}
+
+func TestParseNotificationsSkipsPaneLookupForSinglePane(t *testing.T) {
+	// 候補が 1 つしかない window で tmux を余計に叩かないこと
+	out := tmuxLine("main", "$0", "@4", "1", "web", "%2", "🔔")
+
+	items := parseNotifications(out, func(string) string {
+		t.Error("単一 pane の window で pane option を引いている")
+		return ""
+	})
+	if len(items) != 1 || items[0].PaneID != "%2" {
+		t.Fatalf("単一 pane の window のパースが誤り: %+v", items)
+	}
+}
+
+func TestParseNotificationsKeepsTabsInNames(t *testing.T) {
+	// タブを含む window 名でもフィールド数が狂わない (\t 区切りだと消えていた)
+	out := tmuxLine("main", "$0", "@4", "1", "we\tb", "%2", "🔔")
+
+	items := parseNotifications(out, paneOptions(nil))
+	if len(items) != 1 || items[0].WindowName != "we\tb" {
+		t.Fatalf("タブを含む window 名が壊れている: %+v", items)
+	}
+}
+
+func TestParseNotificationsSkipsBrokenLines(t *testing.T) {
+	out := "\n" + tmuxLine("main", "@3") +
+		tmuxLine("", "", "", "", "", "", "") +
+		tmuxLine("main", "$0", "@4", "1", "web", "%2", "🔔")
+
+	items := parseNotifications(out, paneOptions(nil))
 	if len(items) != 1 || items[0].WindowID != "@4" {
 		t.Fatalf("壊れた行が混入している: %+v", items)
 	}
 }
 
 func TestParseNotificationsEmpty(t *testing.T) {
-	if items := parseNotifications(""); len(items) != 0 {
+	if items := parseNotifications("", paneOptions(nil)); len(items) != 0 {
 		t.Fatalf("空出力で通知が生えた: %+v", items)
 	}
 }
 
+func TestTmuxEnvAddsUTF8LocaleOnlyWhenMissing(t *testing.T) {
+	t.Setenv("LANG", "")
+	t.Setenv("LC_ALL", "")
+	t.Setenv("LC_CTYPE", "")
+	if !hasEnv(tmuxEnv(), "LC_CTYPE=en_US.UTF-8") {
+		t.Error("locale が無い環境で LC_CTYPE が補われていない")
+	}
+
+	t.Setenv("LANG", "ja_JP.UTF-8")
+	if hasEnv(tmuxEnv(), "LC_CTYPE=en_US.UTF-8") {
+		t.Error("LANG がある環境で LC_CTYPE を上書きしている")
+	}
+}
+
+func TestTmuxEnvDropsOuterTmux(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-501/suzu,123,0")
+	t.Setenv("TMUX_PANE", "%1")
+	for _, kv := range tmuxEnv() {
+		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
+			t.Errorf("外側 server を指す env が残っている: %q", kv)
+		}
+	}
+}
+
+func hasEnv(env []string, want string) bool {
+	for _, kv := range env {
+		if kv == want {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDefinesLocale(t *testing.T) {
+	cases := map[string]bool{
+		"LANG=ja_JP.UTF-8": true,
+		"LC_ALL=C":         true,
+		"LC_CTYPE=C":       true,
+		// 空値は未設定と同じ扱い
+		"LANG=":              false,
+		"LANGUAGE=ja":        false,
+		"PATH=/usr/bin":      false,
+		"LC_CTYPE_EXTRA=foo": false,
+	}
+	for kv, want := range cases {
+		if got := definesLocale(kv); got != want {
+			t.Errorf("definesLocale(%q) = %v, want %v", kv, got, want)
+		}
+	}
+}
+
 func TestParseRealClientSkipsControlMode(t *testing.T) {
-	out := "/dev/ttys001\t1\t/dev/ttys001\n/dev/ttys004\t0\t/dev/ttys004\n"
+	out := tmuxLine("/dev/ttys001", "1", "/dev/ttys001") + tmuxLine("/dev/ttys004", "0", "/dev/ttys004")
 	if got := parseRealClient(out, "/dev/ttys004"); got != "/dev/ttys004" {
 		t.Fatalf("control mode client を選んでいる: %q", got)
 	}
@@ -44,7 +148,7 @@ func TestParseRealClientSkipsControlMode(t *testing.T) {
 
 func TestParseRealClientSkipsEmptyTTY(t *testing.T) {
 	// client_control_mode を解釈できない tmux では空文字になるため tty で判別する
-	out := "/dev/ttys001\t\t\n/dev/ttys004\t\t/dev/ttys004\n"
+	out := tmuxLine("/dev/ttys001", "", "") + tmuxLine("/dev/ttys004", "", "/dev/ttys004")
 	if got := parseRealClient(out, ""); got != "/dev/ttys004" {
 		t.Fatalf("tty が空の client を選んでいる: %q", got)
 	}
@@ -52,16 +156,16 @@ func TestParseRealClientSkipsEmptyTTY(t *testing.T) {
 
 func TestParseRealClientPrefersPaneTTY(t *testing.T) {
 	// 普段の端末からの attach が先に並んでいても、右 pane の tty と一致する client を選ぶ
-	out := "/dev/ttys001\t0\t/dev/ttys001\n" +
-		"/dev/ttys009\t1\t/dev/ttys009\n" +
-		"/dev/ttys004\t0\t/dev/ttys004\n"
+	out := tmuxLine("/dev/ttys001", "0", "/dev/ttys001") +
+		tmuxLine("/dev/ttys009", "1", "/dev/ttys009") +
+		tmuxLine("/dev/ttys004", "0", "/dev/ttys004")
 	if got := parseRealClient(out, "/dev/ttys004"); got != "/dev/ttys004" {
 		t.Fatalf("右 pane 以外の client を選んでいる: %q", got)
 	}
 }
 
 func TestParseRealClientFallsBackWhenPaneTTYUnmatched(t *testing.T) {
-	out := "/dev/ttys009\t1\t/dev/ttys009\n/dev/ttys001\t0\t/dev/ttys001\n"
+	out := tmuxLine("/dev/ttys009", "1", "/dev/ttys009") + tmuxLine("/dev/ttys001", "0", "/dev/ttys001")
 	if got := parseRealClient(out, "/dev/ttys004"); got != "/dev/ttys001" {
 		t.Fatalf("一致なし時に非 control の実 client へ落ちていない: %q", got)
 	}
@@ -105,7 +209,7 @@ func TestPreviewLinesEmpty(t *testing.T) {
 }
 
 func TestParseInnerPane(t *testing.T) {
-	pane, ok := parseInnerPane("%4\t/dev/ttys004\n")
+	pane, ok := parseInnerPane("%4" + fieldSeparator + "/dev/ttys004\n")
 	if !ok || pane.ID != "%4" || pane.TTY != "/dev/ttys004" {
 		t.Fatalf("右 pane のパースが誤り: %+v ok=%v", pane, ok)
 	}

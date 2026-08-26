@@ -12,7 +12,11 @@ import (
 // @claude-waiting が set された window 1 件。pane と window の両方に set されるため
 // window 単位に畳んだ後の姿を表す
 type Notification struct {
-	Session     string
+	Session string
+	// switch-client の target に使う。tmux は `%` `$` `@` で始まる target を
+	// pane/session/window の ID として解釈するため、その形の session 名は
+	// 名前では引けない。表示は Session (名前)、指定は SessionID と分ける
+	SessionID   string
 	WindowID    string
 	WindowIndex string
 	WindowName  string
@@ -26,12 +30,23 @@ type innerPane struct {
 	TTY string
 }
 
+// tmux 出力のフィールド区切り。window 名やコマンド行にはタブが入り得るため、
+// テキストに現れない ASCII Unit Separator を使う (Noroshi/Noroshi/TmuxModels.swift と同じ)
+const fieldSeparator = "\x1f"
+
 const (
-	waitingFilter   = "#{?#{@claude-waiting},1,0}"
-	waitingFormat   = "#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{pane_id}\t#{@claude-waiting}"
-	clientFormat    = "#{client_name}\t#{client_control_mode}\t#{client_tty}"
-	innerPaneFilter = "#{?#{" + sidebarPaneOption + "},0,1}"
-	innerPaneFormat = "#{pane_id}\t#{pane_tty}"
+	// Claude Code の hook が通知元 pane (-p) と その window (-w) に set する option。
+	// window option は同じ window の全 pane へ継承されるため、pane ローカルに
+	// 値を持つ pane だけが通知元と分かる
+	waitingOption = "@claude-waiting"
+	waitingFilter = "#{?#{" + waitingOption + "},1,0}"
+	waitingFormat = "#{session_name}" + fieldSeparator + "#{session_id}" + fieldSeparator +
+		"#{window_id}" + fieldSeparator + "#{window_index}" + fieldSeparator +
+		"#{window_name}" + fieldSeparator + "#{pane_id}" + fieldSeparator + "#{" + waitingOption + "}"
+	waitingFieldCount = 7
+	clientFormat      = "#{client_name}" + fieldSeparator + "#{client_control_mode}" + fieldSeparator + "#{client_tty}"
+	innerPaneFilter   = "#{?#{" + sidebarPaneOption + "},0,1}"
+	innerPaneFormat   = "#{pane_id}" + fieldSeparator + "#{pane_tty}"
 )
 
 // サイドバーは外側 tmux の pane で動くため $TMUX は外側 server を指す。
@@ -39,13 +54,31 @@ const (
 func tmuxEnv() []string {
 	env := os.Environ()
 	kept := env[:0]
+	locale := false
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "TMUX=") || strings.HasPrefix(kv, "TMUX_PANE=") {
 			continue
 		}
+		locale = locale || definesLocale(kv)
 		kept = append(kept, kv)
 	}
+	if !locale {
+		// locale がどれも無いと tmux は非 UTF-8 端末とみなし、日本語や絵文字を
+		// `_` へサニタイズする (documents/adr/0008)。en_US.UTF-8 は macOS にも
+		// Linux にも標準で存在するため、最小の補いとしてこれを足す
+		kept = append(kept, "LC_CTYPE=en_US.UTF-8")
+	}
 	return kept
+}
+
+// tmux が文字コードの判定に使う環境変数が値付きで入っているか
+func definesLocale(kv string) bool {
+	for _, name := range []string{"LANG=", "LC_ALL=", "LC_CTYPE="} {
+		if strings.HasPrefix(kv, name) && len(kv) > len(name) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c Config) innerCommand(args ...string) *exec.Cmd {
@@ -97,36 +130,64 @@ func fetchNotifications(cfg Config) notificationsMsg {
 		// 内側 server が落ちている等。通知なし扱いにして理由だけ添える
 		return notificationsMsg{err: fmt.Errorf("通知一覧の取得に失敗: %w", err)}
 	}
-	return notificationsMsg{items: parseNotifications(out)}
+	return notificationsMsg{items: parseNotifications(out, cfg.paneWaitingOption)}
 }
 
-// list-panes の出力を window 単位に畳む。-p と -w の両方に set された window は
-// 複数行で出てくるため、最初の行 (= 最初に見つかった icon) を代表にする
-func parseNotifications(out string) []Notification {
-	var items []Notification
-	seen := map[string]bool{}
+// pane ローカルに set された @claude-waiting。window から継承しただけの pane では空になる。
+// -q があるため未設定でも exit 0 で空文字が返る
+func (c Config) paneWaitingOption(paneID string) string {
+	out, err := output(c.innerCommand("show-options", "-p", "-q", "-v", "-t", paneID, waitingOption))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
+// list-panes の出力を window 単位に畳む。@claude-waiting は通知元 pane (-p) と
+// window (-w) の両方に set され、window option は同じ window の全 pane へ継承されるため、
+// 複数 pane の window では候補が複数行で出てくる。
+// paneOption は候補が 2 つ以上ある時だけ引き、通知元 pane を代表に選ぶ
+func parseNotifications(out string, paneOption func(paneID string) string) []Notification {
+	var windowIDs []string
+	candidates := map[string][]Notification{}
 	for _, line := range strings.Split(out, "\n") {
-		if line == "" {
+		fields := strings.Split(line, fieldSeparator)
+		if len(fields) != waitingFieldCount || fields[2] == "" {
 			continue
 		}
-		fields := strings.Split(line, "\t")
-		if len(fields) != 6 || fields[1] == "" {
-			continue
-		}
-		if seen[fields[1]] {
-			continue
-		}
-		seen[fields[1]] = true
-		items = append(items, Notification{
+		notification := Notification{
 			Session:     fields[0],
-			WindowID:    fields[1],
-			WindowIndex: fields[2],
-			WindowName:  fields[3],
-			PaneID:      fields[4],
-			Icon:        fields[5],
-		})
+			SessionID:   fields[1],
+			WindowID:    fields[2],
+			WindowIndex: fields[3],
+			WindowName:  fields[4],
+			PaneID:      fields[5],
+			Icon:        fields[6],
+		}
+		if _, seen := candidates[notification.WindowID]; !seen {
+			windowIDs = append(windowIDs, notification.WindowID)
+		}
+		candidates[notification.WindowID] = append(candidates[notification.WindowID], notification)
+	}
+	var items []Notification
+	for _, windowID := range windowIDs {
+		items = append(items, notificationSource(candidates[windowID], paneOption))
 	}
 	return items
+}
+
+// 同じ window の候補から通知元 pane の行を選ぶ。
+// どの pane にも pane ローカルの値が無ければ最初の行を代表にする
+func notificationSource(candidates []Notification, paneOption func(paneID string) string) Notification {
+	if len(candidates) == 1 {
+		return candidates[0]
+	}
+	for _, candidate := range candidates {
+		if paneOption(candidate.PaneID) != "" {
+			return candidate
+		}
+	}
+	return candidates[0]
 }
 
 // 切り替えるべき内側 tmux の client を選ぶ。ユーザーの実環境では普段の端末からの attach も
@@ -139,7 +200,7 @@ func parseRealClient(out string, paneTTY string) string {
 		if line == "" {
 			continue
 		}
-		fields := strings.Split(line, "\t")
+		fields := strings.Split(line, fieldSeparator)
 		if len(fields) != 3 || fields[0] == "" {
 			continue
 		}
@@ -158,7 +219,7 @@ func parseRealClient(out string, paneTTY string) string {
 }
 
 func parseInnerPane(out string) (innerPane, bool) {
-	fields := strings.Split(strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]), "\t")
+	fields := strings.Split(strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]), fieldSeparator)
 	if len(fields) != 2 || fields[0] == "" {
 		return innerPane{}, false
 	}
@@ -196,7 +257,7 @@ func jump(cfg Config, n Notification) error {
 	if client == "" {
 		return fmt.Errorf("内側 tmux の実 client が見つかりません")
 	}
-	if err := runTmux(cfg.innerCommand("switch-client", "-c", client, "-t", n.Session)); err != nil {
+	if err := runTmux(cfg.innerCommand("switch-client", "-c", client, "-t", n.SessionID)); err != nil {
 		return fmt.Errorf("switch-client に失敗: %w", err)
 	}
 	return nil

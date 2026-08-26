@@ -115,10 +115,14 @@ inner_pane_shows() {
   wait_for "tmux -L $OUT capture-pane -p -t \"\$(inner_pane_id)\" 2>/dev/null | grep -qF -- '$1'"
 }
 
-# 未設定の hook も show-hooks には名前だけ並ぶため、値が入った時だけ現れる
-# 添字付きの表記 (after-set-option[0]) で判定する
+# suzu の doorbell hook は touch 先のパスで自分のものと分かる。
+# ユーザー自身の after-set-option hook と混ざるため、名前ではなくパスで数える
+doorbell_hook_count() {
+  tmux -L "$IN" show-hooks -g after-set-option 2>/dev/null | grep -cF -- "$DOORBELL"
+}
+
 inner_hook_installed() {
-  tmux -L "$IN" show-hooks -g 2>/dev/null | grep -q 'after-set-option\['
+  [ "$(doorbell_hook_count)" -ge 1 ]
 }
 
 inner_key_installed() {
@@ -270,21 +274,24 @@ wait_for "! active_pane_is_sidebar" \
   && pass "q で内側 pane へ戻る" || fail "q で戻らない"
 
 echo "=== 5d. j/k で選択を移すとプレビューも切り替わる ==="
-# 2 件目 (test1) を足す。list-panes -a は session 順なので test1 がカーソル 0 に来る
+# 2 件目 (test1) を足す。list-panes -a は session 順なので test1 が先頭へ割り込む
 tmux -L "$IN" set-option -t test1:0.0 -p @claude-waiting '🔔09:30' || fail "2 件目の @claude-waiting の set"
 sidebar_shows 'Noroshi 🔔2' && pass "件数表示が 2" || fail "件数表示が 2 にならない"
-sidebar_shows 'INNER_READY_MARKER' \
-  && pass "カーソル 0 (test1) のプレビューに切り替わる" || fail "カーソル 0 のプレビューが切り替わらない"
+# 整数の cursor をそのまま使うと、割り込みで選択が別 window へずれ、
+# 直後の Enter が意図しない window へ飛ぶ
+sidebar_shows 'PREVIEW_TEST2_MARKER' \
+  && pass "一覧が更新されても選択中の window (test2) が保たれる" \
+  || fail "一覧の更新で選択が別 window へずれた"
 
 tmux -L "$T" send-keys -t term:0.0 C-b N
 wait_for "active_pane_is_sidebar" || fail "プレビュー検証のためのフォーカス移動"
-tmux -L "$T" send-keys -t term:0.0 j
-sidebar_shows 'PREVIEW_TEST2_MARKER' \
-  && pass "j で選択を下げるとプレビューが test2 の pane に変わる" \
-  || fail "j でプレビューが切り替わらない"
 tmux -L "$T" send-keys -t term:0.0 k
 sidebar_shows 'INNER_READY_MARKER' \
-  && pass "k で選択を戻すとプレビューも戻る" || fail "k でプレビューが戻らない"
+  && pass "k で選択を上げるとプレビューが test1 の pane に変わる" \
+  || fail "k でプレビューが切り替わらない"
+tmux -L "$T" send-keys -t term:0.0 j
+sidebar_shows 'PREVIEW_TEST2_MARKER' \
+  && pass "j で選択を戻すとプレビューも戻る" || fail "j でプレビューが戻らない"
 tmux -L "$T" send-keys -t term:0.0 q
 wait_for "! active_pane_is_sidebar" || fail "プレビュー検証後のフォーカス復帰"
 
@@ -438,19 +445,115 @@ echo "=== 6. 通知の解除 ==="
 tmux -L "$IN" set-option -t test2:0.0 -pu @claude-waiting || fail "@claude-waiting の解除"
 sidebar_shows '通知なし' && pass "解除で「通知なし」に戻る" || fail "解除しても「通知なし」に戻らない"
 
-echo "=== 7. stop は外側と注入したキー・hook だけを片付ける ==="
+echo "=== 6a. 名前で target にできない session へもジャンプできる ==="
+# tmux は %/$/@ で始まる target を pane/session/window の ID として解釈するため、
+# その形の session 名は名前では引けない (has-session -t '%odd' は can't find pane)。
+# switch-client には名前ではなく #{session_id} を渡す必要がある。
+# . と : は new-session が _ へ均すため、この形が実際に起こり得る唯一の衝突
+ODD_SESSION='%odd-session'
+ODD_PANE=$(tmux -L "$IN" new-session -d -s "$ODD_SESSION" -n odd -P -F '#{pane_id}' -x 200 -y 50 \
+  'echo ODD_MARKER; exec sh') || fail "名前で引けない session の作成"
+ODD_ID=$(tmux -L "$IN" display-message -p -t "$ODD_PANE" '#{session_id}')
+tmux -L "$IN" has-session -t "$ODD_SESSION" 2>/dev/null \
+  && fail "前提が崩れている (名前で引けてしまう)" || pass "この session 名は tmux が名前で引けない"
+tmux -L "$IN" set-option -t "$ODD_PANE" -p @claude-waiting '🔔12:00' || fail "通知の set"
+sidebar_shows "▸ $ODD_SESSION (1)" \
+  && pass "名前で引けない session の見出しが出る" || fail "見出しが出ない"
+
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "active_pane_is_sidebar" || fail "6a のためのフォーカス移動"
+tmux -L "$T" send-keys -t term:0.0 Enter
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = '$ODD_SESSION' ]" \
+  && pass "名前で引けない session へジャンプできる (session ID 指定)" \
+  || fail "名前で引けない session へジャンプできない"
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "6a 後のフォーカス復帰"
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+tmux -L "$IN" kill-session -t "$ODD_ID" 2>/dev/null
+sidebar_shows '通知なし' || fail "6a の後片付け"
+
+echo "=== 6b. 複数 pane の window では通知元 pane をプレビューする ==="
+# @claude-waiting は通知元 pane (-p) と window (-w) の両方に set され、window option は
+# 同じ window の全 pane へ継承される。先頭 pane を代表にすると別 pane を映してしまう
+tmux -L "$IN" new-window -d -t test2 -n multi 'echo NOT_ORIGIN_MARKER; exec sh' \
+  || fail "複数 pane 検証用 window の作成"
+tmux -L "$IN" split-window -d -t test2:multi 'echo ORIGIN_PANE_MARKER; exec sh' \
+  || fail "複数 pane 検証用 pane の作成"
+tmux -L "$IN" set-option -t test2:multi.1 -p @claude-waiting '🔔11:00' || fail "通知元 pane への set"
+tmux -L "$IN" set-option -t test2:multi -w @claude-waiting '🔔11:00' || fail "window への set"
+
+sidebar_shows 'ORIGIN_PANE_MARKER' \
+  && pass "通知元 pane のプレビューが出る" || fail "通知元 pane のプレビューが出ない"
+sidebar_hides 'NOT_ORIGIN_MARKER' \
+  && pass "同じ window の別 pane を映していない" || fail "通知元でない pane を映している"
+tmux -L "$IN" kill-window -t test2:multi 2>/dev/null
+sidebar_shows '通知なし' || fail "6b の後片付け"
+
+echo "=== 6c. detach 等で消えた内側 pane を start が作り直す ==="
+# 内側で prefix+d すると右 pane の attach プロセスが終わり pane だけが消える。
+# サイドバーは残るため、次の start が「構築済み」と誤認して素通りしないこと
+tmux -L "$OUT" kill-pane -t "$(inner_pane_id)" 2>/dev/null
+wait_for "[ \"\$(outer_panes)\" = 1 ]" \
+  && pass "内側 pane が消えるとサイドバーだけが残る" || fail "内側 pane を消せない"
+suzu start >/dev/null 2>&1
+wait_for "[ \"\$(outer_panes)\" = 2 ]" \
+  && pass "start が消えた内側 pane を作り直す" || fail "start が内側 pane を作り直さない"
+inner_pane_shows '[test' \
+  && pass "作り直した内側 pane が内側 tmux へ attach する" || fail "作り直した内側 pane が attach しない"
+wait_for "[ \"\$(tmux -L $OUT display-message -p -t \"\$(sidebar_pane)\" '#{pane_width}')\" = 40 ]" \
+  && pass "再作成後もサイドバー幅が 40 に戻る" || fail "再作成後のサイドバー幅が戻らない"
+
+echo "=== 7. stop は自分が入れたものだけを片付ける ==="
 tmux -L "$T" kill-server 2>/dev/null
+# ユーザー自身の bind と after-set-option hook。stop がこれらを巻き込まないこと
+tmux -L "$IN" bind-key Z display-message 'USER_BIND_MARKER' || fail "ユーザー bind の仕込み"
+tmux -L "$IN" set-hook -ga after-set-option "run-shell -b 'true USER_HOOK_MARKER'" \
+  || fail "ユーザー hook の仕込み"
+# 外側 socket に相乗りした無関係な session。kill-server だとこれも巻き添えで落ちる
+tmux -L "$OUT" new-session -d -s bystander -x 80 -y 24 'exec sh' || fail "相乗り session の作成"
+
+suzu start >/dev/null 2>&1
+[ "$(doorbell_hook_count)" = 1 ] \
+  && pass "start を重ねても doorbell hook は 1 つ (set-hook -ga が冪等)" \
+  || fail "doorbell hook が重複している ($(doorbell_hook_count) 個)"
+
 suzu stop >/dev/null
-tmux -L "$OUT" has-session 2>/dev/null \
-  && fail "stop 後も外側 server が残っている" || pass "stop で外側 server が消えた"
+tmux -L "$OUT" has-session -t suzu 2>/dev/null \
+  && fail "stop 後も外側の suzu session が残っている" || pass "stop で外側の suzu session が消えた"
+tmux -L "$OUT" has-session -t bystander 2>/dev/null \
+  && pass "同じ socket の無関係な session は残る (kill-server していない)" \
+  || fail "無関係な session まで落とした"
+tmux -L "$OUT" kill-server 2>/dev/null
 tmux -L "$IN" has-session -t test1 2>/dev/null \
   && pass "内側 server は無傷" || fail "内側 server が巻き添えで死んだ"
 inner_key_installed N \
   && fail "stop 後もジャンプキーが残っている" || pass "stop でジャンプキー (prefix+N) が解除された"
 inner_key_installed b \
   && fail "stop 後も toggle キーが残っている" || pass "stop で toggle キー (prefix+b) が解除された"
-inner_hook_installed \
-  && fail "stop 後も after-set-option hook が残っている" || pass "stop で after-set-option hook が解除された"
+[ "$(doorbell_hook_count)" = 0 ] \
+  && pass "stop で doorbell hook が解除された" || fail "stop 後も doorbell hook が残っている"
+tmux -L "$IN" list-keys -T prefix Z 2>/dev/null | grep -q USER_BIND_MARKER \
+  && pass "ユーザー自身の bind は残る" || fail "ユーザー自身の bind まで消した"
+tmux -L "$IN" show-hooks -g after-set-option 2>/dev/null | grep -q USER_HOOK_MARKER \
+  && pass "ユーザー自身の after-set-option hook は残る" || fail "ユーザー自身の hook まで消した"
+tmux -L "$IN" unbind-key Z 2>/dev/null
+
+echo "=== 7b. suzu のものでない bind は stop で触らず、上書き時は警告する ==="
+tmux -L "$IN" bind-key N display-message 'USER_JUMP_MARKER' || fail "ユーザーのジャンプキー bind の仕込み"
+suzu stop >/dev/null
+tmux -L "$IN" list-keys -T prefix N 2>/dev/null | grep -q USER_JUMP_MARKER \
+  && pass "suzu のものでない prefix+N は stop で消さない" || fail "ユーザーの prefix+N を消した"
+
+WARN=$(suzu start 2>&1 >/dev/null)
+echo "$WARN" | grep -q '既存の bind' \
+  && pass "既存 bind を上書きする時は警告する" || fail "上書きの警告が出ない"
+inner_key_installed N \
+  && pass "警告した上で suzu のバインドを入れる" || fail "警告するだけで上書きしていない"
+WARN=$(suzu start 2>&1 >/dev/null)
+echo "$WARN" | grep -q '既存の bind' \
+  && fail "自分が入れた bind にも警告している" || pass "自分が入れた bind には警告しない"
+suzu stop >/dev/null
+tmux -L "$OUT" kill-server 2>/dev/null
 
 echo "=== 8. tty から起動した時の attach と二重ネストのガード ==="
 # 非 tty の start は attach しないため、実端末から使う経路 (exec で tmux へ置き換わる) は

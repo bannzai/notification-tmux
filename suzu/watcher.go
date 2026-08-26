@@ -108,7 +108,10 @@ func (w *watcher) watchControlMode() {
 }
 
 func (w *watcher) readControlMode() {
-	cmd := w.cfg.innerCommand("-C", "attach", "-f", "no-output")
+	// ignore-size: この control client は監視専用で画面を持たない。付けないと初期寸法が
+	// session のサイズ計算に参加し、実端末の client のレイアウトを縮め得る
+	// (documents/adr/0009)
+	cmd := w.cfg.innerCommand("-C", "attach", "-f", "no-output,ignore-size")
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return
@@ -126,6 +129,9 @@ func (w *watcher) readControlMode() {
 	}
 	stdinR.Close()
 	w.program.Send(connectionMsg{connected: true})
+	// 切断中に起きた変化はイベントとして再送されないため、接続が成立した時点で
+	// 一覧を取り直す。初回 fetch が内側 server の起動と競合して失敗した場合もここで埋まる
+	w.trigger()
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), controlLineLimit)
@@ -146,6 +152,8 @@ var refreshEvents = map[string]bool{
 	"%window-add":              true,
 	"%window-close":            true,
 	"%window-renamed":          true,
+	"%layout-change":           true,
+	"%window-pane-changed":     true,
 	"%unlinked-window-add":     true,
 	"%unlinked-window-close":   true,
 	"%unlinked-window-renamed": true,

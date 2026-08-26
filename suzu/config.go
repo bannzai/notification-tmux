@@ -59,17 +59,28 @@ func (c Config) defaultSidebarCmd() string {
 	return c.exportedEnv() + " " + shellQuote(executablePath()) + " sidebar"
 }
 
+// SidebarCmd / InnerAttach は他の設定から既定値を組み立てるため、Config の値を
+// 無条件に焼き込むと引き継ぐたびに入れ子で肥大する (SUZU_SIDEBAR_CMD の既定値は
+// exportedEnv 自身を含む)。ユーザーが明示した時だけ引き継ぐ
+var explicitOnlyEnv = []string{"SUZU_SIDEBAR_CMD", "SUZU_INNER_TMUX_CMD"}
+
 // 子プロセス (サイドバー・注入したキーバインド) へ引き継ぐ設定。
 // tmux の pane やキーバインドは親の環境を継がないため、コマンド行へ焼き込む
 func (c Config) exportedEnv() string {
-	return strings.Join([]string{
+	exported := []string{
 		"SUZU_OUTER_SOCKET=" + shellQuote(c.OuterSocket),
 		"SUZU_INNER_TMUX=" + shellQuote(strings.Join(c.InnerTmux, " ")),
 		"SUZU_INNER_JUMP_KEY=" + shellQuote(c.JumpKey),
 		"SUZU_INNER_TOGGLE_KEY=" + shellQuote(c.ToggleKey),
 		"SUZU_SIDEBAR_WIDTH=" + shellQuote(strconv.Itoa(c.SidebarWidth)),
 		"SUZU_DOORBELL_FILE=" + shellQuote(c.DoorbellFile),
-	}, " ")
+	}
+	for _, name := range explicitOnlyEnv {
+		if value := os.Getenv(name); value != "" {
+			exported = append(exported, name+"="+shellQuote(value))
+		}
+	}
+	return strings.Join(exported, " ")
 }
 
 func envOr(name, fallback string) string {

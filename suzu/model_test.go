@@ -364,6 +364,68 @@ func TestCtrlNAndCtrlPMoveCursorInBothModes(t *testing.T) {
 	}
 }
 
+func TestNotificationRefreshKeepsSelectedWindow(t *testing.T) {
+	m := groupedModel()
+	m, _ = pressKeys(m, runesKey("j"))
+	if got := m.selectedPaneID(); got != "%2" {
+		t.Fatalf("前提が崩れている (2 件目を選べていない): %q", got)
+	}
+
+	// 再取得で先頭に別の通知が割り込むと、整数の cursor はそのままでは別 window を指す
+	refreshed, _ := m.Update(notificationsMsg{items: append(
+		[]Notification{{Session: "new", WindowID: "@9", WindowName: "incoming", PaneID: "%9"}},
+		sample()...)})
+	if got := refreshed.(model).selectedPaneID(); got != "%2" {
+		t.Errorf("更新後に選択中の window を見失っている: %q", got)
+	}
+}
+
+func TestNotificationRefreshClampsWhenSelectedWindowIsGone(t *testing.T) {
+	m := groupedModel()
+	m, _ = pressKeys(m, runesKey("j"), runesKey("j"))
+
+	refreshed, _ := m.Update(notificationsMsg{items: sample()[:1]})
+	if got := refreshed.(model).cursor; got != 0 {
+		t.Errorf("選択中 window が消えた時に丸められていない: cursor=%d", got)
+	}
+}
+
+func TestPrefixIsCheckedBeforeCtrlC(t *testing.T) {
+	// 内側 prefix が C-c の環境。C-c は quit ではなく prefix として働く
+	m := newModel(Config{JumpKey: "N", ToggleKey: "b"}, normalizePrefix("C-c"))
+
+	after, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Error("prefix であるはずの ctrl+c で quit した")
+	}
+	if !after.awaitingPrefixKey {
+		t.Error("ctrl+c が prefix として扱われていない")
+	}
+
+	// prefix が C-c でない環境では従来どおり quit する
+	if _, cmd := pressKeys(testModel(), tea.KeyMsg{Type: tea.KeyCtrlC}); cmd == nil {
+		t.Error("prefix が C-b の環境で ctrl+c が効かない")
+	}
+}
+
+func TestTmuxNotationJumpKeyMatchesBubbleteaKey(t *testing.T) {
+	// SUZU_INNER_JUMP_KEY=C-n のような tmux 表記でも、サイドバー側の判定が一致すること
+	m := testModel()
+	m.cfg.JumpKey = "C-n"
+	m.cfg.ToggleKey = "M-b"
+
+	_, jumpCmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB}, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if got := actionError(jumpCmd); !strings.Contains(got, "外側 pane の列挙") {
+		t.Errorf("tmux 表記の jump key (C-n) が prefix シーケンスで効かない: %q", got)
+	}
+
+	_, toggleCmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b"), Alt: true})
+	if got := actionError(toggleCmd); !strings.Contains(got, "先に start") {
+		t.Errorf("tmux 表記の toggle key (M-b) が効かない: %q", got)
+	}
+}
+
 func TestViewShowsSessionHeadersAndFilterLine(t *testing.T) {
 	m := groupedModel()
 	view := m.View()

@@ -40,8 +40,8 @@ const usage = `usage: suzu {start|stop|toggle|focus|status|sidebar}
   start    外側 tmux を構築して attach する (構築済みなら attach のみ = 冪等)。
            内側 tmux にジャンプキー・トグルキーと doorbell hook を注入する
            (メモリ上のみ。~/.tmux.conf は変更しない)
-  stop     外側 server を落とし、内側へ注入したキーバインドと hook を解除する
-           (内側の session・window には一切触れない)
+  stop     外側の suzu session を落とし、内側へ注入したキーバインドと hook を解除する
+           (同じ socket の他の session、内側の session・window には一切触れない)
   toggle   サイドバーの表示/非表示を切り替える
   focus    {sidebar|inner|toggle} フォーカスを移す
   status   外側の状態を表示する
