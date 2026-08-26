@@ -4,23 +4,24 @@
 # 構成:
 #   外側 tmux (別 socket。~/.tmux.conf を読まず outer.conf のみ)
 #   └─ session "noroshi" / window 0 (1 枚固定)
-#      ├─ 左 pane: サイドバー (Phase 0 ではプレースホルダ表示のみ)
+#      ├─ 左 pane: サイドバー (tui-sidebar/bin/noroshi-sidebar があればそれ、無ければプレースホルダ)
 #      └─ 右 pane: TMUX= を外して内側 (普段の) tmux server へ attach
 #
 # 使い方:
 #   noroshi-outer start   外側を構築して attach する (構築済みなら attach のみ = 冪等)。
-#                         内側 tmux に「prefix + N でサイドバーへフォーカス」のキーバインドを
+#                         内側 tmux に「prefix + N でサイドバーへフォーカス」のキーバインドと、
+#                         @claude-waiting の変化を doorbell ファイルへ伝える after-set-option hook を
 #                         注入する (メモリ上のみ。conf ファイルは変更しない)
 #   noroshi-outer toggle  サイドバーの表示/非表示を切り替える
 #   noroshi-outer focus {sidebar|inner|toggle}
 #                         フォーカスを移す (sidebar 指定時、非表示なら表示してから移す)
 #   noroshi-outer status  外側の状態を表示する
-#   noroshi-outer stop    外側 server を落とし、内側へ注入したキーバインドを解除する
+#   noroshi-outer stop    外側 server を落とし、内側へ注入したキーバインドと hook を解除する
 #                         (内側の session・window には一切触れない)
 #
 # フォーカス移動の役割分担 (外側はキーを 1 つも掴まない):
 #   内側 → サイドバー: 内側 tmux の prefix + N (start が注入する run-shell バインド)
-#   サイドバー → 内側: サイドバー側のキー処理 (プレースホルダは何かキーで戻る)
+#   サイドバー → 内側: サイドバー側のキー処理 (サイドバーが解釈しないキーで戻る)
 #   マウスクリックでも両方向に移動できる (外側 mouse on)
 #
 # 環境変数 (すべて任意):
@@ -29,8 +30,11 @@
 #                           検証用に "tmux -L <隔離socket>" へ差し替えられる
 #   NOROSHI_INNER_TMUX_CMD  右 pane で実行する内側への接続コマンド (default: $NOROSHI_INNER_TMUX attach)
 #   NOROSHI_INNER_JUMP_KEY  内側に注入する「サイドバーへ」の prefix キー (default: N)
-#   NOROSHI_SIDEBAR_CMD     左 pane で実行するコマンド (default: sidebar-placeholder.sh)
+#   NOROSHI_SIDEBAR_CMD     左 pane で実行するコマンド
+#                           (default: tui-sidebar/bin/noroshi-sidebar。無ければ sidebar-placeholder.sh)
 #   NOROSHI_SIDEBAR_WIDTH   サイドバーの幅 (default: 40)
+#   NOROSHI_DOORBELL_FILE   @claude-waiting の変化をサイドバーへ知らせる touch 先
+#                           (default: ${XDG_STATE_HOME:-$HOME/.local/state}/noroshi/doorbell)
 set -euo pipefail
 
 SPIKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -41,7 +45,14 @@ SIDEBAR_WIDTH="${NOROSHI_SIDEBAR_WIDTH:-40}"
 INNER_TMUX="${NOROSHI_INNER_TMUX:-tmux}"
 INNER_CMD="${NOROSHI_INNER_TMUX_CMD:-$INNER_TMUX attach}"
 JUMP_KEY="${NOROSHI_INNER_JUMP_KEY:-N}"
-SIDEBAR_CMD="${NOROSHI_SIDEBAR_CMD:-NOROSHI_OUTER_SOCKET='$SOCKET' NOROSHI_INNER_JUMP_KEY='$JUMP_KEY' bash '$SPIKE_DIR/sidebar-placeholder.sh'}"
+DOORBELL="${NOROSHI_DOORBELL_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/noroshi/doorbell}"
+SIDEBAR_BIN="$SPIKE_DIR/../tui-sidebar/bin/noroshi-sidebar"
+if [ -x "$SIDEBAR_BIN" ]; then
+  DEFAULT_SIDEBAR_CMD="NOROSHI_OUTER_SOCKET='$SOCKET' NOROSHI_INNER_TMUX='$INNER_TMUX' NOROSHI_DOORBELL_FILE='$DOORBELL' '$SIDEBAR_BIN'"
+else
+  DEFAULT_SIDEBAR_CMD="NOROSHI_OUTER_SOCKET='$SOCKET' NOROSHI_INNER_JUMP_KEY='$JUMP_KEY' bash '$SPIKE_DIR/sidebar-placeholder.sh'"
+fi
+SIDEBAR_CMD="${NOROSHI_SIDEBAR_CMD:-$DEFAULT_SIDEBAR_CMD}"
 
 t() { tmux -L "$SOCKET" "$@"; }
 # INNER_TMUX は "tmux -L socket" のような複数語を許すため、意図的にクオートせず word split する
@@ -74,6 +85,15 @@ install_inner_jump_key() {
     2>/dev/null || true
 }
 
+# 内側 tmux の「どこかで set-option された」を doorbell ファイルへ伝える hook を注入する
+# (メモリ上のみ・冪等)。control mode の購読は attach 中 session の pane に限られるため、
+# 別 session の @claude-waiting を拾う経路はこの global hook が担う。
+# hook 内で set-option すると再帰発火するため touch しか行わない
+install_notification_hook() {
+  mkdir -p "$(dirname "$DOORBELL")"
+  inner_t set-hook -g after-set-option "run-shell -b \"touch '$DOORBELL'\"" 2>/dev/null || true
+}
+
 cmd_start() {
   if ! outer_exists; then
     # -f は server 起動時のみ効くため、server を生む new-session に付ける
@@ -82,6 +102,7 @@ cmd_start() {
     sidebar_open
   fi
   install_inner_jump_key
+  install_notification_hook
   if [ -t 0 ]; then
     if [ -n "${TMUX:-}" ]; then
       echo "エラー: tmux の中から start しないでください (外側が二重にネストします)。新しいターミナル pane から実行してください" >&2
@@ -138,8 +159,9 @@ cmd_status() {
 }
 
 cmd_stop() {
-  # 注入したキーバインドの解除は外側の有無に関わらず行う (冪等)
+  # 注入したキーバインドと hook の解除は外側の有無に関わらず行う (冪等)
   inner_t unbind-key "$JUMP_KEY" 2>/dev/null || true
+  inner_t set-hook -gu after-set-option 2>/dev/null || true
   outer_exists || { echo "外側 tmux (socket: $SOCKET): 未起動"; return 0; }
   t kill-server
   echo "外側 tmux (socket: $SOCKET) を停止しました (内側 tmux には触れていません)"
