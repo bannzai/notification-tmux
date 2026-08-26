@@ -28,7 +28,7 @@ const (
 	waitingFilter   = "#{?#{@claude-waiting},1,0}"
 	waitingFormat   = "#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{pane_id}\t#{@claude-waiting}"
 	clientFormat    = "#{client_name}\t#{client_control_mode}\t#{client_tty}"
-	innerPaneFilter = "#{?#{@noroshi-sidebar},0,1}"
+	innerPaneFilter = "#{?#{" + sidebarPaneOption + "},0,1}"
 	innerPaneFormat = "#{pane_id}\t#{pane_tty}"
 )
 
@@ -139,7 +139,7 @@ func parseInnerPane(out string) (innerPane, bool) {
 }
 
 func fetchInnerPane(cfg Config) (innerPane, error) {
-	out, err := output(cfg.outerCommand("list-panes", "-t", "noroshi:0",
+	out, err := output(cfg.outerCommand("list-panes", "-t", outerWindow,
 		"-f", innerPaneFilter, "-F", innerPaneFormat))
 	if err != nil {
 		return innerPane{}, fmt.Errorf("外側 pane の列挙に失敗: %w", err)

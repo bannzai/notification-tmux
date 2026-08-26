@@ -12,11 +12,11 @@ func runesKey(text string) tea.KeyMsg {
 }
 
 // socket 名は実在しないものにする。tea.Cmd を実行するテストがあるため、
-// 取り違えて普段の tmux や本番の noroshi socket へ命令が飛ばないようにする
+// 取り違えて普段の tmux や本番の suzu socket へ命令が飛ばないようにする
 func testModel() model {
 	cfg := Config{
-		InnerTmux:   []string{"tmux", "-L", "noroshi-unit-test-inner"},
-		OuterSocket: "noroshi-unit-test-outer",
+		InnerTmux:   []string{"tmux", "-L", "suzu-unit-test-inner"},
+		OuterSocket: "suzu-unit-test-outer",
 		JumpKey:     "N",
 	}
 	return newModel(cfg, normalizePrefix("C-b"))

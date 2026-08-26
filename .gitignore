@@ -22,7 +22,7 @@ tmp/
 var/
 
 # Go のビルド成果物
-tui-sidebar/bin/
+suzu/bin/
 
 # macOS
 .DS_Store
