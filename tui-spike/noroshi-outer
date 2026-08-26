@@ -1,0 +1,98 @@
+#!/usr/bin/env bash
+# issue #67 Phase 0: nested tmux の外側「額縁」を構築・操作するスパイクスクリプト
+#
+# 構成:
+#   外側 tmux (別 socket。~/.tmux.conf を読まず outer.conf のみ)
+#   └─ session "noroshi" / window 0 (1 枚固定)
+#      ├─ 左 pane: サイドバー (Phase 0 ではプレースホルダ表示のみ)
+#      └─ 右 pane: TMUX= を外して内側 (普段の) tmux server へ attach
+#
+# 使い方:
+#   noroshi-outer start   外側を構築して attach する (構築済みなら attach のみ = 冪等)
+#   noroshi-outer toggle  サイドバーの表示/非表示を切り替える (内側 tmux の run-shell から呼べる)
+#   noroshi-outer status  外側の状態を表示する
+#   noroshi-outer stop    外側 server だけを落とす (内側 tmux には一切触れない)
+#
+# 環境変数 (すべて任意):
+#   NOROSHI_OUTER_SOCKET    外側 socket 名 (default: noroshi)
+#   NOROSHI_INNER_TMUX_CMD  右 pane で実行する内側への接続コマンド (default: tmux attach)
+#                           検証用に隔離 socket を指すコマンドへ差し替えられる
+#   NOROSHI_SIDEBAR_CMD     左 pane で実行するコマンド (default: プレースホルダ表示)
+#   NOROSHI_SIDEBAR_WIDTH   サイドバーの幅 (default: 40)
+set -euo pipefail
+
+SPIKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOCKET="${NOROSHI_OUTER_SOCKET:-noroshi}"
+CONF="${NOROSHI_OUTER_CONF:-$SPIKE_DIR/outer.conf}"
+SESSION="noroshi"
+SIDEBAR_WIDTH="${NOROSHI_SIDEBAR_WIDTH:-40}"
+INNER_CMD="${NOROSHI_INNER_TMUX_CMD:-tmux attach}"
+SIDEBAR_CMD="${NOROSHI_SIDEBAR_CMD:-printf '\n  Noroshi sidebar\n  (Phase 0 placeholder)\n\n  ここに通知一覧が入る\n'; while :; do sleep 3600; done}"
+
+t() { tmux -L "$SOCKET" "$@"; }
+
+outer_exists() { t has-session -t "$SESSION" 2>/dev/null; }
+
+sidebar_pane_id() {
+  t list-panes -t "$SESSION:0" -f '#{@noroshi-sidebar}' -F '#{pane_id}' 2>/dev/null | head -1
+}
+
+# サイドバー pane が無ければ左側に作る (あれば何もしない = 冪等)
+sidebar_open() {
+  [ -n "$(sidebar_pane_id)" ] && return 0
+  local pane_id
+  pane_id=$(t split-window -hb -d -P -F '#{pane_id}' -l "$SIDEBAR_WIDTH" -t "$SESSION:0" \
+    "$SIDEBAR_CMD")
+  t set-option -p -t "$pane_id" @noroshi-sidebar 1
+}
+
+cmd_start() {
+  if ! outer_exists; then
+    # -f は server 起動時のみ効くため、server を生む new-session に付ける
+    tmux -L "$SOCKET" -f "$CONF" new-session -d -s "$SESSION" -x 220 -y 60 \
+      "TMUX= $INNER_CMD"
+    sidebar_open
+  fi
+  if [ -t 0 ]; then
+    if [ -n "${TMUX:-}" ]; then
+      echo "エラー: tmux の中から start しないでください (外側が二重にネストします)。新しいターミナル pane から実行してください" >&2
+      exit 1
+    fi
+    exec tmux -L "$SOCKET" -f "$CONF" attach -t "$SESSION"
+  fi
+  echo "外側 tmux (socket: $SOCKET) を構築しました。attach: tmux -L $SOCKET attach -t $SESSION"
+}
+
+cmd_toggle() {
+  outer_exists || { echo "エラー: 外側 tmux がありません。先に start してください" >&2; exit 1; }
+  local sid
+  sid=$(sidebar_pane_id)
+  if [ -n "$sid" ]; then
+    t kill-pane -t "$sid"
+  else
+    sidebar_open
+  fi
+}
+
+cmd_status() {
+  if ! outer_exists; then
+    echo "外側 tmux (socket: $SOCKET): 未起動"
+    return 0
+  fi
+  echo "外側 tmux (socket: $SOCKET): 起動中"
+  t list-panes -t "$SESSION:0" -F '  pane #{pane_id} #{pane_width}x#{pane_height} active=#{pane_active} sidebar=#{@noroshi-sidebar} cmd=#{pane_current_command}'
+}
+
+cmd_stop() {
+  outer_exists || { echo "外側 tmux (socket: $SOCKET): 未起動"; return 0; }
+  t kill-server
+  echo "外側 tmux (socket: $SOCKET) を停止しました (内側 tmux には触れていません)"
+}
+
+case "${1:-}" in
+  start)  cmd_start ;;
+  toggle) cmd_toggle ;;
+  status) cmd_status ;;
+  stop)   cmd_stop ;;
+  *)      echo "usage: noroshi-outer {start|toggle|status|stop}" >&2; exit 64 ;;
+esac
