@@ -21,7 +21,7 @@
 #
 # フォーカス移動の役割分担 (外側はキーを 1 つも掴まない):
 #   内側 → サイドバー: 内側 tmux の prefix + N (start が注入する run-shell バインド)
-#   サイドバー → 内側: サイドバー側のキー処理 (サイドバーが解釈しないキーで戻る)
+#   サイドバー → 内側: サイドバー側のキー処理 (TUI は同じ prefix + N と q/Esc で戻る)
 #   マウスクリックでも両方向に移動できる (外側 mouse on)
 #
 # 環境変数 (すべて任意):
@@ -48,7 +48,7 @@ JUMP_KEY="${NOROSHI_INNER_JUMP_KEY:-N}"
 DOORBELL="${NOROSHI_DOORBELL_FILE:-${XDG_STATE_HOME:-$HOME/.local/state}/noroshi/doorbell}"
 SIDEBAR_BIN="$SPIKE_DIR/../tui-sidebar/bin/noroshi-sidebar"
 if [ -x "$SIDEBAR_BIN" ]; then
-  DEFAULT_SIDEBAR_CMD="NOROSHI_OUTER_SOCKET='$SOCKET' NOROSHI_INNER_TMUX='$INNER_TMUX' NOROSHI_DOORBELL_FILE='$DOORBELL' '$SIDEBAR_BIN'"
+  DEFAULT_SIDEBAR_CMD="NOROSHI_OUTER_SOCKET='$SOCKET' NOROSHI_INNER_TMUX='$INNER_TMUX' NOROSHI_INNER_JUMP_KEY='$JUMP_KEY' NOROSHI_DOORBELL_FILE='$DOORBELL' '$SIDEBAR_BIN'"
 else
   DEFAULT_SIDEBAR_CMD="NOROSHI_OUTER_SOCKET='$SOCKET' NOROSHI_INNER_JUMP_KEY='$JUMP_KEY' bash '$SPIKE_DIR/sidebar-placeholder.sh'"
 fi

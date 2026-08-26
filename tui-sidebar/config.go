@@ -10,8 +10,11 @@ import (
 // すべて環境変数で与えられ、noroshi-outer が pane 起動時に引き継ぐ
 type Config struct {
 	// 内側 tmux server へ命令するコマンド。"tmux -L socket" のような複数語を許すため slice
-	InnerTmux    []string
-	OuterSocket  string
+	InnerTmux   []string
+	OuterSocket string
+	// 内側 tmux が「サイドバーへ」に使っている prefix 後のキー。
+	// サイドバーは同じキーで内側へ戻し、往復を対称にする
+	JumpKey      string
 	DoorbellFile string
 }
 
@@ -24,9 +27,14 @@ func loadConfig() Config {
 	if socket == "" {
 		socket = "noroshi"
 	}
+	jumpKey := os.Getenv("NOROSHI_INNER_JUMP_KEY")
+	if jumpKey == "" {
+		jumpKey = "N"
+	}
 	return Config{
 		InnerTmux:    inner,
 		OuterSocket:  socket,
+		JumpKey:      jumpKey,
 		DoorbellFile: doorbellFile(),
 	}
 }

@@ -9,7 +9,6 @@ import (
 
 const (
 	defaultWidth = 40
-	footer       = "j/k:選択 Enter:ジャンプ q:右へ"
 	// 反転表示。lipgloss を足さずに選択行を強調するため生の SGR を使う
 	reverseOn  = "\x1b[7m"
 	reverseOff = "\x1b[0m"
@@ -26,15 +25,18 @@ type actionMsg struct{ err error }
 
 type model struct {
 	cfg       Config
+	prefix    prefixKey
 	items     []Notification
 	cursor    int
 	connected bool
-	err       error
-	width     int
+	// prefix を受けた直後。次の 1 キーが jump key なら内側へ戻る
+	awaitingJumpKey bool
+	err             error
+	width           int
 }
 
-func newModel(cfg Config) model {
-	return model{cfg: cfg, width: defaultWidth}
+func newModel(cfg Config, prefix prefixKey) model {
+	return model{cfg: cfg, prefix: prefix, width: defaultWidth}
 }
 
 func (m model) Init() tea.Cmd {
@@ -65,9 +67,22 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "ctrl+c":
+	key := msg.String()
+	if key == "ctrl+c" {
 		return m, tea.Quit
+	}
+	if m.awaitingJumpKey {
+		m.awaitingJumpKey = false
+		if key == m.cfg.JumpKey {
+			return m, m.focusInnerCmd()
+		}
+		return m, nil
+	}
+	if key == m.prefix.Key {
+		m.awaitingJumpKey = true
+		return m, nil
+	}
+	switch key {
 	case "q", "esc":
 		// pane が死ぬと外側の額縁が壊れるため、終了せずフォーカスだけ内側へ返す
 		return m, m.focusInnerCmd()
@@ -83,10 +98,6 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.items) {
 			return m, m.jumpCmd(m.items[m.cursor])
 		}
-	default:
-		// フォーカスがサイドバーにある間は内側 tmux にキーが届かない。
-		// サイドバーが解釈しないキーは飲み込まず、q/Esc と同じくフォーカスを返す
-		return m, m.focusInnerCmd()
 	}
 	return m, nil
 }
@@ -127,11 +138,15 @@ func (m model) View() string {
 		}
 	}
 	b.WriteString("\n")
-	writeLine(&b, footer, width, false)
+	writeLine(&b, m.footer(), width, false)
 	if m.err != nil {
 		writeLine(&b, m.err.Error(), width, false)
 	}
 	return b.String()
+}
+
+func (m model) footer() string {
+	return fmt.Sprintf("j/k:選択 Enter:ジャンプ %s %s:右へ", m.prefix.Display, m.cfg.JumpKey)
 }
 
 func writeLine(b *strings.Builder, text string, width int, emphasized bool) {

@@ -14,7 +14,7 @@ import (
 
 func main() {
 	cfg := loadConfig()
-	program := tea.NewProgram(newModel(cfg))
+	program := tea.NewProgram(newModel(cfg, fetchInnerPrefix(cfg)))
 	go newWatcher(cfg, program).run()
 	if _, err := program.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "エラー:", err)

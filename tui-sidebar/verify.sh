@@ -7,6 +7,9 @@
 #   OUT = noroshi-outer が構築する外側 (隔離 socket 名を環境変数で注入)
 #   T   = ターミナルエミュレータの代役。pane 内で外側へ attach し、send-keys で
 #         「実端末からのキー入力 → 外側 → サイドバー TUI」の経路を再現する
+#   X   = 「普段の端末から内側へ attach しっぱなしの余分な実 client」の代役。
+#         実 client が複数ある状況を作り、ジャンプが右 pane の client だけを
+#         切り替えることを確かめる
 #
 # 実行: bash tui-sidebar/verify.sh
 # 全項目 PASS で exit 0。
@@ -18,6 +21,7 @@ TMP_DIR="$SIDEBAR_DIR/../tmp"
 IN="nsv-in-$$"
 OUT="nsv-out-$$"
 T="nsv-term-$$"
+X="nsv-extra-$$"
 DOORBELL_DIR="$TMP_DIR/phase1-doorbell-$$"
 DOORBELL="$DOORBELL_DIR/doorbell"
 FAIL=0
@@ -27,6 +31,7 @@ fail() { echo "FAIL: $1"; FAIL=1; }
 
 cleanup() {
   tmux -L "$T" kill-server 2>/dev/null
+  tmux -L "$X" kill-server 2>/dev/null
   tmux -L "$OUT" kill-server 2>/dev/null
   tmux -L "$IN" kill-server 2>/dev/null
   rm -rf "$DOORBELL_DIR"
@@ -56,9 +61,14 @@ active_pane_is_sidebar() {
   [ "$(tmux -L "$OUT" list-panes -t noroshi:0 -f '#{pane_active}' -F '#{@noroshi-sidebar}')" = 1 ]
 }
 
-# control mode client (サイドバーの購読) を除いた、実端末に繋がった内側 client の session
-inner_real_client_session() {
-  tmux -L "$IN" list-clients -f '#{?#{==:#{client_control_mode},1},0,1}' -F '#{client_session}' 2>/dev/null | head -1
+# 指定 tty に繋がった内側 client の session。実 client が複数あるため tty で特定する
+client_session_of_tty() {
+  tmux -L "$IN" list-clients -f "#{==:#{client_tty},$1}" -F '#{client_session}' 2>/dev/null | head -1
+}
+
+# 外側の右 pane (= 内側へ attach している pane) の tty
+inner_pane_tty() {
+  tmux -L "$OUT" list-panes -t noroshi:0 -f '#{?#{@noroshi-sidebar},0,1}' -F '#{pane_tty}' 2>/dev/null | head -1
 }
 
 # 未設定の hook も show-hooks には名前だけ並ぶため、値が入った時だけ現れる
@@ -84,6 +94,15 @@ tmux -L "$IN" new-session -d -s test2 -n claude-work -x 200 -y 50 'exec sh' \
   || fail "内側 session test2 の起動"
 wait_for "tmux -L $IN capture-pane -p -t test1:0.0 2>/dev/null | grep -q INNER_READY_MARKER" \
   && pass "内側 server 起動 (test1 / test2)" || fail "内側 server 起動"
+
+echo "=== 2b. 余分な実 client を先に内側へ attach させる ==="
+# ユーザーの実環境では普段の端末からの attach が残ったまま nested の右 pane が attach する。
+# ジャンプが右 pane 以外の client を掴む退行を検出するため、右 pane より先に attach させる
+tmux -L "$X" -f /dev/null new-session -d -s extra -x 200 -y 50 "TMUX= tmux -L $IN attach -t test1" \
+  || fail "余分な実 client の起動"
+EXTRA_TTY=$(tmux -L "$X" list-panes -t extra:0 -F '#{pane_tty}' 2>/dev/null | head -1)
+wait_for "[ \"\$(client_session_of_tty $EXTRA_TTY)\" = test1 ]" \
+  && pass "余分な実 client が test1 へ attach" || fail "余分な実 client が attach しない"
 
 echo "=== 3. noroshi-outer start でサイドバー TUI 付きの外側を構築 ==="
 NOROSHI_OUTER_SOCKET="$OUT" \
@@ -113,15 +132,38 @@ tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y 60 \
 wait_for "tmux -L $T capture-pane -p -t term:0.0 2>/dev/null | grep -q INNER_READY_MARKER" \
   && pass "T → 外側 → 内側の描画チェーン成立" || fail "T → 外側 → 内側の描画チェーン成立"
 
+INNER_TTY=$(inner_pane_tty)
 tmux -L "$T" send-keys -t term:0.0 C-b N
 wait_for "active_pane_is_sidebar" \
   && pass "prefix+N でサイドバーへフォーカスが移る" || fail "prefix+N でサイドバーへフォーカスが移らない"
 
 tmux -L "$T" send-keys -t term:0.0 Enter
-wait_for "[ \"\$(inner_real_client_session)\" = test2 ]" \
-  && pass "Enter で内側の実 client が test2 へジャンプ" || fail "Enter で内側の実 client がジャンプしない"
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test2 ]" \
+  && pass "Enter で右 pane の client が test2 へジャンプ" || fail "Enter で右 pane の client がジャンプしない"
+[ "$(client_session_of_tty "$EXTRA_TTY")" = test1 ] \
+  && pass "余分な実 client は test1 のまま (右 pane 以外を切り替えない)" \
+  || fail "右 pane 以外の client を切り替えてしまった"
 wait_for "! active_pane_is_sidebar" \
   && pass "ジャンプ後にフォーカスが内側 pane へ戻る" || fail "ジャンプ後にフォーカスが戻らない"
+
+echo "=== 5b. サイドバーからも prefix+N で右 pane へ戻る ==="
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "active_pane_is_sidebar" \
+  && pass "再度 prefix+N でサイドバーへ移る" || fail "再度 prefix+N でサイドバーへ移らない"
+# 同じ prefix+N が往復のトグルになる (内側は注入バインド、サイドバーは TUI 側のキー処理)
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "! active_pane_is_sidebar" \
+  && pass "サイドバーで prefix+N を押すと内側 pane へ戻る" || fail "サイドバーの prefix+N で戻らない"
+
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "active_pane_is_sidebar" || fail "3 度目の prefix+N でサイドバーへ移らない"
+tmux -L "$T" send-keys -t term:0.0 x
+sleep 1
+active_pane_is_sidebar \
+  && pass "未割り当てキー (x) ではフォーカスが動かない" || fail "未割り当てキーでフォーカスが動いた"
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" \
+  && pass "q で内側 pane へ戻る" || fail "q で戻らない"
 
 echo "=== 6. 通知の解除 ==="
 tmux -L "$IN" set-option -t test2:0.0 -pu @claude-waiting || fail "@claude-waiting の解除"

@@ -37,7 +37,7 @@ func TestParseNotificationsEmpty(t *testing.T) {
 
 func TestParseRealClientSkipsControlMode(t *testing.T) {
 	out := "/dev/ttys001\t1\t/dev/ttys001\n/dev/ttys004\t0\t/dev/ttys004\n"
-	if got := parseRealClient(out); got != "/dev/ttys004" {
+	if got := parseRealClient(out, "/dev/ttys004"); got != "/dev/ttys004" {
 		t.Fatalf("control mode client を選んでいる: %q", got)
 	}
 }
@@ -45,13 +45,43 @@ func TestParseRealClientSkipsControlMode(t *testing.T) {
 func TestParseRealClientSkipsEmptyTTY(t *testing.T) {
 	// client_control_mode を解釈できない tmux では空文字になるため tty で判別する
 	out := "/dev/ttys001\t\t\n/dev/ttys004\t\t/dev/ttys004\n"
-	if got := parseRealClient(out); got != "/dev/ttys004" {
+	if got := parseRealClient(out, ""); got != "/dev/ttys004" {
 		t.Fatalf("tty が空の client を選んでいる: %q", got)
 	}
 }
 
+func TestParseRealClientPrefersPaneTTY(t *testing.T) {
+	// 普段の端末からの attach が先に並んでいても、右 pane の tty と一致する client を選ぶ
+	out := "/dev/ttys001\t0\t/dev/ttys001\n" +
+		"/dev/ttys009\t1\t/dev/ttys009\n" +
+		"/dev/ttys004\t0\t/dev/ttys004\n"
+	if got := parseRealClient(out, "/dev/ttys004"); got != "/dev/ttys004" {
+		t.Fatalf("右 pane 以外の client を選んでいる: %q", got)
+	}
+}
+
+func TestParseRealClientFallsBackWhenPaneTTYUnmatched(t *testing.T) {
+	out := "/dev/ttys009\t1\t/dev/ttys009\n/dev/ttys001\t0\t/dev/ttys001\n"
+	if got := parseRealClient(out, "/dev/ttys004"); got != "/dev/ttys001" {
+		t.Fatalf("一致なし時に非 control の実 client へ落ちていない: %q", got)
+	}
+}
+
 func TestParseRealClientNone(t *testing.T) {
-	if got := parseRealClient(""); got != "" {
+	if got := parseRealClient("", "/dev/ttys004"); got != "" {
 		t.Fatalf("client が無いのに %q を返した", got)
+	}
+}
+
+func TestParseInnerPane(t *testing.T) {
+	pane, ok := parseInnerPane("%4\t/dev/ttys004\n")
+	if !ok || pane.ID != "%4" || pane.TTY != "/dev/ttys004" {
+		t.Fatalf("右 pane のパースが誤り: %+v ok=%v", pane, ok)
+	}
+	if _, ok := parseInnerPane(""); ok {
+		t.Error("空出力を pane として受け入れている")
+	}
+	if _, ok := parseInnerPane("%4\n"); ok {
+		t.Error("tty が欠けた出力を pane として受け入れている")
 	}
 }

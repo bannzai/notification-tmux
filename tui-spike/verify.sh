@@ -45,9 +45,13 @@ wait_for "tmux -L $IN capture-pane -p -t inner:0.0 2>/dev/null | grep -q INNER_R
   && pass "内側 server 起動" || fail "内側 server 起動"
 
 echo "=== 2. noroshi-outer start で外側を構築 (非 tty なので attach はしない) ==="
+# 本スクリプトは Phase 0 (額縁 + プレースホルダ) の検証。tui-sidebar のバイナリが
+# ビルド済みだと noroshi-outer がそちらを採用してしまうため、プレースホルダを明示的に固定する
+PLACEHOLDER_CMD="NOROSHI_OUTER_SOCKET='$OUT' bash '$SPIKE_DIR/sidebar-placeholder.sh'"
 NOROSHI_OUTER_SOCKET="$OUT" \
 NOROSHI_INNER_TMUX="tmux -L $IN" \
 NOROSHI_INNER_TMUX_CMD="tmux -L $IN attach -t inner" \
+NOROSHI_SIDEBAR_CMD="$PLACEHOLDER_CMD" \
   bash "$SPIKE_DIR/noroshi-outer" start </dev/null || fail "noroshi-outer start"
 
 wait_for "[ \"\$(tmux -L $OUT list-panes -t noroshi:0 2>/dev/null | wc -l | tr -d ' ')\" = 2 ]" \
@@ -65,6 +69,7 @@ echo "=== 3. 冪等性: start を再実行しても pane が増えない ==="
 NOROSHI_OUTER_SOCKET="$OUT" \
 NOROSHI_INNER_TMUX="tmux -L $IN" \
 NOROSHI_INNER_TMUX_CMD="tmux -L $IN attach -t inner" \
+NOROSHI_SIDEBAR_CMD="$PLACEHOLDER_CMD" \
   bash "$SPIKE_DIR/noroshi-outer" start </dev/null >/dev/null 2>&1
 [ "$(tmux -L "$OUT" list-panes -t noroshi:0 | wc -l | tr -d ' ')" = 2 ] \
   && pass "start は冪等 (2 pane のまま)" || fail "start は冪等"
@@ -99,11 +104,11 @@ wait_for "! active_pane_is_sidebar" \
   && pass "サイドバーで何かキーを押すと内側へフォーカスが戻る" || fail "サイドバーから内側へフォーカスが戻らない"
 
 echo "=== 5. サイドバーのトグル ==="
-NOROSHI_OUTER_SOCKET="$OUT" bash "$SPIKE_DIR/noroshi-outer" toggle </dev/null
+NOROSHI_OUTER_SOCKET="$OUT" NOROSHI_SIDEBAR_CMD="$PLACEHOLDER_CMD" bash "$SPIKE_DIR/noroshi-outer" toggle </dev/null
 [ "$(tmux -L "$OUT" list-panes -t noroshi:0 | wc -l | tr -d ' ')" = 1 ] \
   && pass "toggle でサイドバーが閉じる (1 pane)" || fail "toggle でサイドバーが閉じる"
 
-NOROSHI_OUTER_SOCKET="$OUT" bash "$SPIKE_DIR/noroshi-outer" toggle </dev/null
+NOROSHI_OUTER_SOCKET="$OUT" NOROSHI_SIDEBAR_CMD="$PLACEHOLDER_CMD" bash "$SPIKE_DIR/noroshi-outer" toggle </dev/null
 [ "$(tmux -L "$OUT" list-panes -t noroshi:0 | wc -l | tr -d ' ')" = 2 ] \
   && pass "toggle でサイドバーが再表示 (2 pane)" || fail "toggle でサイドバーが再表示"
 

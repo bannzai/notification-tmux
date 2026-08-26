@@ -18,10 +18,18 @@ type Notification struct {
 	Icon        string
 }
 
+// 外側 tmux でサイドバーの隣にいる pane。内側 tmux へ attach している右 pane を指す
+type innerPane struct {
+	ID  string
+	TTY string
+}
+
 const (
-	waitingFilter = "#{?#{@claude-waiting},1,0}"
-	waitingFormat = "#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{pane_id}\t#{@claude-waiting}"
-	clientFormat  = "#{client_name}\t#{client_control_mode}\t#{client_tty}"
+	waitingFilter   = "#{?#{@claude-waiting},1,0}"
+	waitingFormat   = "#{session_name}\t#{window_id}\t#{window_index}\t#{window_name}\t#{pane_id}\t#{@claude-waiting}"
+	clientFormat    = "#{client_name}\t#{client_control_mode}\t#{client_tty}"
+	innerPaneFilter = "#{?#{@noroshi-sidebar},0,1}"
+	innerPaneFormat = "#{pane_id}\t#{pane_tty}"
 )
 
 // サイドバーは外側 tmux の pane で動くため $TMUX は外側 server を指す。
@@ -94,9 +102,12 @@ func parseNotifications(out string) []Notification {
 	return items
 }
 
-// 内側 tmux の「実端末に繋がった client」= 右 pane の attach。control mode client
-// (サイドバー自身が張っている購読) と取り違えないよう除外する
-func parseRealClient(out string) string {
+// 切り替えるべき内側 tmux の client を選ぶ。ユーザーの実環境では普段の端末からの attach も
+// 生きているため実 client が複数あり、tty が右 pane と一致するものを選ばないと
+// サイドバーから見えていない別の client を切り替えてしまう。
+// control mode client (サイドバー自身が張っている購読) は常に除外する
+func parseRealClient(out string, paneTTY string) string {
+	fallback := ""
 	for _, line := range strings.Split(out, "\n") {
 		if line == "" {
 			continue
@@ -105,16 +116,47 @@ func parseRealClient(out string) string {
 		if len(fields) != 3 || fields[0] == "" {
 			continue
 		}
-		if fields[1] == "1" || fields[2] == "" {
+		name, controlMode, tty := fields[0], fields[1], fields[2]
+		if controlMode == "1" || tty == "" {
 			continue
 		}
-		return fields[0]
+		if tty == paneTTY {
+			return name
+		}
+		if fallback == "" {
+			fallback = name
+		}
 	}
-	return ""
+	return fallback
+}
+
+func parseInnerPane(out string) (innerPane, bool) {
+	fields := strings.Split(strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]), "\t")
+	if len(fields) != 2 || fields[0] == "" {
+		return innerPane{}, false
+	}
+	return innerPane{ID: fields[0], TTY: fields[1]}, true
+}
+
+func fetchInnerPane(cfg Config) (innerPane, error) {
+	out, err := output(cfg.outerCommand("list-panes", "-t", "noroshi:0",
+		"-f", innerPaneFilter, "-F", innerPaneFormat))
+	if err != nil {
+		return innerPane{}, fmt.Errorf("外側 pane の列挙に失敗: %w", err)
+	}
+	pane, ok := parseInnerPane(out)
+	if !ok {
+		return innerPane{}, fmt.Errorf("外側に内側 pane が見つかりません")
+	}
+	return pane, nil
 }
 
 // 通知の window を内側で表示し、フォーカスを内側 pane へ返す
 func jump(cfg Config, n Notification) error {
+	pane, err := fetchInnerPane(cfg)
+	if err != nil {
+		return err
+	}
 	if err := cfg.innerCommand("select-window", "-t", n.WindowID).Run(); err != nil {
 		return fmt.Errorf("select-window に失敗: %w", err)
 	}
@@ -122,27 +164,26 @@ func jump(cfg Config, n Notification) error {
 	if err != nil {
 		return fmt.Errorf("list-clients に失敗: %w", err)
 	}
-	client := parseRealClient(out)
+	client := parseRealClient(out, pane.TTY)
 	if client == "" {
 		return fmt.Errorf("内側 tmux の実 client が見つかりません")
 	}
 	if err := cfg.innerCommand("switch-client", "-c", client, "-t", n.Session).Run(); err != nil {
 		return fmt.Errorf("switch-client に失敗: %w", err)
 	}
-	return focusInner(cfg)
+	return focusPane(cfg, pane.ID)
 }
 
 // 外側 tmux のフォーカスをサイドバーでない pane (= 内側 attach) へ移す
 func focusInner(cfg Config) error {
-	out, err := output(cfg.outerCommand("list-panes", "-t", "noroshi:0",
-		"-f", "#{?#{@noroshi-sidebar},0,1}", "-F", "#{pane_id}"))
+	pane, err := fetchInnerPane(cfg)
 	if err != nil {
-		return fmt.Errorf("外側 pane の列挙に失敗: %w", err)
+		return err
 	}
-	paneID := strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
-	if paneID == "" {
-		return fmt.Errorf("外側に内側 pane が見つかりません")
-	}
+	return focusPane(cfg, pane.ID)
+}
+
+func focusPane(cfg Config, paneID string) error {
 	if err := cfg.outerCommand("select-pane", "-t", paneID).Run(); err != nil {
 		return fmt.Errorf("select-pane に失敗: %w", err)
 	}
