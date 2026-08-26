@@ -47,8 +47,11 @@ type model struct {
 	connected bool
 	// prefix を受けた直後。次の 1 キーが jump key なら内側へ戻る
 	awaitingJumpKey bool
-	err             error
-	width           int
+	// リスト表示域の先頭に来る行 (session 見出しを含む) の番号
+	offset int
+	err    error
+	width  int
+	height int
 }
 
 func newModel(cfg Config, prefix prefixKey) model {
@@ -59,10 +62,18 @@ func (m model) Init() tea.Cmd {
 	return func() tea.Msg { return fetchNotifications(m.cfg) }
 }
 
+// 状態が動いたら必ずスクロール位置を追従させたいので、実処理は step に置いて
+// ここで一度だけ syncOffset を通す
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	next, cmd := m.step(msg)
+	return next.syncOffset(), cmd
+}
+
+func (m model) step(msg tea.Msg) (model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
+		m.height = msg.Height
 	case notificationsMsg:
 		m.items = msg.items
 		m.err = msg.err
@@ -106,7 +117,7 @@ func (m model) selectedPaneID() string {
 	return visible[m.cursor].PaneID
 }
 
-func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m model) updateKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	key := msg.String()
 	if key == "ctrl+c" {
 		return m, tea.Quit
@@ -121,6 +132,13 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if key == m.prefix.Key {
 		m.awaitingJumpKey = true
 		return m, nil
+	}
+	// 選択の上下は絞り込み中でも効かせる。フィルタで絞ってからそのまま選びたいため
+	switch key {
+	case "ctrl+p":
+		return m.moveCursor(-1)
+	case "ctrl+n":
+		return m.moveCursor(1)
 	}
 	if m.filtering {
 		return m.updateFilterKey(msg)
@@ -139,15 +157,9 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, m.focusInnerCmd()
 	case "up", "k":
-		if m.cursor > 0 {
-			m.cursor--
-			return m, m.previewCmd()
-		}
+		return m.moveCursor(-1)
 	case "down", "j":
-		if m.cursor < len(m.visible())-1 {
-			m.cursor++
-			return m, m.previewCmd()
-		}
+		return m.moveCursor(1)
 	case "enter":
 		if visible := m.visible(); m.cursor < len(visible) {
 			return m, m.jumpCmd(visible[m.cursor])
@@ -156,23 +168,31 @@ func (m model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// ctrl+c と prefix + jump key は updateKey 側で先に処理済みなので、ここでは
-// 残りをすべて query の編集として扱う
-func (m model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.Type {
-	case tea.KeyEnter:
+// ctrl+c・prefix + jump key・ctrl+n/p は updateKey 側で先に処理済みなので、
+// ここでは残りをすべて query の編集として扱う
+func (m model) updateFilterKey(msg tea.KeyMsg) (model, tea.Cmd) {
+	switch msg.String() {
+	case "enter":
 		m.filtering = false
 		return m, nil
-	case tea.KeyEsc:
+	case "esc":
 		m.filtering = false
 		return m.clearQuery()
-	case tea.KeyBackspace:
+	// ctrl+h は端末によっては backspace と同じバイトで届くが、別扱いの端末もあるため両方受ける
+	case "backspace", "ctrl+h":
 		runes := []rune(m.query)
 		if len(runes) == 0 {
 			return m, nil
 		}
 		m.query = string(runes[:len(runes)-1])
 		return m.requery()
+	case "ctrl+u":
+		return m.clearQuery()
+	case "ctrl+w":
+		m.query = deleteLastWord(m.query)
+		return m.requery()
+	}
+	switch msg.Type {
 	case tea.KeySpace:
 		m.query += " "
 		return m.requery()
@@ -183,12 +203,30 @@ func (m model) updateFilterKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m model) clearQuery() (tea.Model, tea.Cmd) {
+// 末尾の空白ごと直前の単語を落とす (readline の ctrl+w と同じ挙動)
+func deleteLastWord(query string) string {
+	trimmed := strings.TrimRight(query, " ")
+	if at := strings.LastIndex(trimmed, " "); at >= 0 {
+		return trimmed[:at+1]
+	}
+	return ""
+}
+
+func (m model) moveCursor(delta int) (model, tea.Cmd) {
+	next := m.cursor + delta
+	if next < 0 || next >= len(m.visible()) {
+		return m, nil
+	}
+	m.cursor = next
+	return m, m.previewCmd()
+}
+
+func (m model) clearQuery() (model, tea.Cmd) {
 	m.query = ""
 	return m.requery()
 }
 
-func (m model) requery() (tea.Model, tea.Cmd) {
+func (m model) requery() (model, tea.Cmd) {
 	m = m.clampCursor()
 	return m, m.previewCmd()
 }
@@ -240,24 +278,38 @@ func (m model) View() string {
 		writeLine(&b, "一致なし", width, "")
 	}
 
-	row := 0
-	for _, group := range groupBySession(visible) {
-		writeLine(&b, fmt.Sprintf("%s %s (%d)", sessionMarker, group.Session, len(group.Items)), width, styleSession)
-		for _, item := range group.Items {
-			// session 名は見出しに出るので window 行からは外す
-			line := fmt.Sprintf("%s %s %s", item.Icon, item.WindowIndex, item.WindowName)
-			if row == m.cursor {
-				writeLine(&b, "> "+line, width, styleSelected)
+	rows, capacity, scrolling := m.scrollGeometry()
+	offset := adjustOffset(m.offset, cursorRow(rows, m.cursor), len(rows), capacity)
+	end := offset + capacity
+	if end > len(rows) {
+		end = len(rows)
+	}
+	if scrolling {
+		writeLine(&b, hiddenCount("↑", offset), width, "")
+	}
+	for _, row := range rows[offset:end] {
+		text, style := row.text, row.style
+		if row.itemIndex >= 0 {
+			if row.itemIndex == m.cursor {
+				text, style = "> "+text, styleSelected
 			} else {
-				writeLine(&b, "  "+line, width, "")
+				text = "  " + text
 			}
-			row++
 		}
+		writeLine(&b, text, width, style)
+	}
+	if scrolling {
+		writeLine(&b, hiddenCount("↓", len(rows)-end), width, "")
 	}
 
-	if len(m.preview) > 0 {
+	if _, previewBudget := m.layout(); previewBudget > 0 {
 		writeLine(&b, strings.Repeat("─", width), width, "")
-		for _, line := range m.preview {
+		// 画面が狭い時は末尾側 (新しい出力) を優先して残す
+		preview := m.preview
+		if len(preview) > previewBudget {
+			preview = preview[len(preview)-previewBudget:]
+		}
+		for _, line := range preview {
 			writeLine(&b, line, width, "")
 		}
 	}
@@ -268,7 +320,9 @@ func (m model) View() string {
 	if m.err != nil {
 		writeLine(&b, m.err.Error(), width, "")
 	}
-	return b.String()
+	// 末尾の改行を残すと bubbletea が空行 1 行として数え、pane が埋まっている時に
+	// 先頭のヘッダーが押し出される
+	return strings.TrimRight(b.String(), "\n")
 }
 
 func (m model) filterLine(matched int) string {
@@ -279,12 +333,21 @@ func (m model) filterLine(matched int) string {
 	return fmt.Sprintf("filter: %s (%d/%d)", query, matched, len(m.items))
 }
 
+// 画面外に続きがある時だけ件数を出す。行数は変えずに空行にして、
+// スクロールの有無でリストの高さが揺れないようにする
+func hiddenCount(marker string, count int) string {
+	if count <= 0 {
+		return ""
+	}
+	return fmt.Sprintf("%s %d", marker, count)
+}
+
 // 幅 40 の pane に日本語 (全角) の案内を 1 行で詰めると溢れて末尾が切れるため 2 行に割る。
 // prefix と jump key はユーザー設定で伸びるので、可変長の方を独立した行に置く
 func (m model) footerLines() []string {
 	return []string{
-		"j/k:選択 Enter:ジャンプ /:絞込",
-		fmt.Sprintf("%s %s か q:右へ", m.prefix.Display, m.cfg.JumpKey),
+		"j/k C-n/C-p:選択 Enter:ジャンプ",
+		fmt.Sprintf("/:絞込 %s %s か q:右へ", m.prefix.Display, m.cfg.JumpKey),
 	}
 }
 

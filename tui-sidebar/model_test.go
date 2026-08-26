@@ -26,9 +26,7 @@ func testModel() model {
 func pressKeys(m model, keys ...tea.KeyMsg) (model, tea.Cmd) {
 	var cmd tea.Cmd
 	for _, key := range keys {
-		var next tea.Model
-		next, cmd = m.updateKey(key)
-		m = next.(model)
+		m, cmd = m.updateKey(key)
 	}
 	return m, cmd
 }
@@ -125,7 +123,7 @@ func TestFooterShowsActualKeys(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("フッターの行数 = %d", len(lines))
 	}
-	if want := "C-t N か q:右へ"; lines[1] != want {
+	if want := "/:絞込 C-t N か q:右へ"; lines[1] != want {
 		t.Errorf("実キーの案内 = %q, want %q", lines[1], want)
 	}
 	// 幅 40 の pane で切れないこと。日本語は 1 文字 2 桁で数える
@@ -240,6 +238,74 @@ func TestFilterModeKeepsExitKeys(t *testing.T) {
 	}
 	if after.query != "" {
 		t.Errorf("prefix + jump key が query に取り込まれた: %q", after.query)
+	}
+}
+
+func TestFilterModeEmacsEditingKeys(t *testing.T) {
+	start := func() model {
+		m := groupedModel()
+		m, _ = pressKeys(m, runesKey("/"))
+		m, _ = pressKeys(m, runesKey("wo"), runesKey("rk"))
+		return m
+	}
+
+	m, _ := pressKeys(start(), tea.KeyMsg{Type: tea.KeyCtrlH})
+	if m.query != "wor" {
+		t.Errorf("ctrl+h で 1 文字削除されない: %q", m.query)
+	}
+
+	m, _ = pressKeys(start(), tea.KeyMsg{Type: tea.KeyCtrlU})
+	if m.query != "" {
+		t.Errorf("ctrl+u で全削除されない: %q", m.query)
+	}
+	if !m.filtering {
+		t.Error("ctrl+u で入力モードから抜けてしまった")
+	}
+
+	m, _ = pressKeys(start(), tea.KeyMsg{Type: tea.KeyCtrlW})
+	if m.query != "" {
+		t.Errorf("ctrl+w で単語が消えない: %q", m.query)
+	}
+}
+
+func TestDeleteLastWord(t *testing.T) {
+	cases := map[string]string{
+		"foo bar":   "foo ",
+		"foo bar  ": "foo ",
+		"foo":       "",
+		"foo   ":    "",
+		"":          "",
+		"a b c":     "a b ",
+	}
+	for query, want := range cases {
+		if got := deleteLastWord(query); got != want {
+			t.Errorf("deleteLastWord(%q) = %q, want %q", query, got, want)
+		}
+	}
+}
+
+func TestCtrlNAndCtrlPMoveCursorInBothModes(t *testing.T) {
+	m := groupedModel()
+	m, _ = pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if got := m.selectedPaneID(); got != "%2" {
+		t.Errorf("通常モードの ctrl+n で下へ動かない: %q", got)
+	}
+	m, _ = pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlP})
+	if got := m.selectedPaneID(); got != "%1" {
+		t.Errorf("通常モードの ctrl+p で上へ戻らない: %q", got)
+	}
+
+	// 絞り込み中でも選択を動かせる (絞ってからそのまま選ぶ流れ)
+	m, _ = pressKeys(m, runesKey("/"), runesKey("work"))
+	if got := len(m.visible()); got != 2 {
+		t.Fatalf("フィルタ結果が 2 件でない: %d", got)
+	}
+	m, _ = pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if got := m.selectedPaneID(); got != "%2" {
+		t.Errorf("入力モードの ctrl+n で下へ動かない: %q", got)
+	}
+	if m.query != "work" {
+		t.Errorf("ctrl+n が query に取り込まれた: %q", m.query)
 	}
 }
 

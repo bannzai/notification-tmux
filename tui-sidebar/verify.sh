@@ -229,8 +229,71 @@ sidebar_shows '▸ test1' \
   && pass "Esc でフィルタが解除され全件に戻る" || fail "Esc でフィルタが解除されない"
 sidebar_hides 'filter:' && pass "解除でフィルタ行が消える" || fail "フィルタ行が残っている"
 
+echo "=== 5e. 絞り込んだまま ctrl+n で選んでジャンプする ==="
+# 右 pane を test1 へ戻し、2 件が一致するクエリで「絞る → 選ぶ → 飛ぶ」を通す
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test1 ]" || fail "右 pane の client を test1 へ戻せない"
+
+tmux -L "$T" send-keys -l -t term:0.0 '/'
+tmux -L "$T" send-keys -l -t term:0.0 'test'
+sidebar_shows 'filter: test_ (2/2)' \
+  && pass "2 件に一致するクエリの入力" || fail "2 件に一致するクエリで絞れない"
+tmux -L "$T" send-keys -t term:0.0 C-n
+tmux -L "$T" send-keys -t term:0.0 Enter
+tmux -L "$T" send-keys -t term:0.0 Enter
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test2 ]" \
+  && pass "入力モード中の ctrl+n で選んだ window へジャンプできる" \
+  || fail "入力モード中の ctrl+n で選択が動かない"
+tmux -L "$T" send-keys -t term:0.0 Escape
+sidebar_hides 'filter:' || fail "5e 後のフィルタ解除"
 tmux -L "$T" send-keys -t term:0.0 q
-wait_for "! active_pane_is_sidebar" || fail "フィルタ検証後のフォーカス復帰"
+wait_for "! active_pane_is_sidebar" || fail "5e 後のフォーカス復帰"
+
+echo "=== 5f. prefix+b でサイドバーを表示/非表示 ==="
+tmux -L "$IN" list-keys -T prefix b 2>/dev/null | grep -q noroshi-outer \
+  && pass "内側に prefix+b の toggle キーが注入されている" || fail "toggle キーの注入"
+
+tmux -L "$T" send-keys -t term:0.0 C-b b
+wait_for "[ \"\$(tmux -L $OUT list-panes -t noroshi:0 2>/dev/null | wc -l | tr -d ' ')\" = 1 ]" \
+  && pass "prefix+b でサイドバーが閉じる (1 pane)" || fail "prefix+b で閉じない"
+tmux -L "$T" send-keys -t term:0.0 C-b b
+wait_for "[ \"\$(tmux -L $OUT list-panes -t noroshi:0 2>/dev/null | wc -l | tr -d ' ')\" = 2 ]" \
+  && pass "prefix+b でサイドバーが再表示 (2 pane)" || fail "prefix+b で再表示されない"
+# 再表示されたサイドバーが env を引き継いでいる (隔離 socket の通知を出せている) こと
+sidebar_shows '▸ test1' \
+  && pass "再表示後も通知一覧を取得できている" || fail "再表示後のサイドバーが通知を出せない"
+
+echo "=== 5g. 画面が狭い時のスクロール ==="
+for i in 1 2 3 4 5 6 7 8; do
+  tmux -L "$IN" new-window -d -t test1 -n "w$i" 'exec sh' || fail "スクロール検証用 window の作成"
+  tmux -L "$IN" set-option -t "test1:w$i.0" -p @claude-waiting '🔔' || fail "スクロール検証用の通知 set"
+done
+# 端末代役を低い高さで作り直す (外側は最後に使われた client のサイズに合わせる)
+tmux -L "$T" kill-server 2>/dev/null
+tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y 18 \
+  "TMUX= tmux -L $OUT attach -t noroshi" || fail "低い端末代役の起動"
+wait_for "[ \"\$(tmux -L $OUT display-message -p -t noroshi:0 '#{window_height}' 2>/dev/null || echo 999)\" -le 20 ]" \
+  || fail "外側が低い端末サイズに追従しない"
+
+sidebar_shows '↓' && pass "画面外に続きがあるインジケータが出る" || fail "下向きインジケータが出ない"
+# 縦が埋まっている時に描画が 1 行はみ出すと、先頭のヘッダーが押し出されて消える
+sidebar_shows 'Noroshi 🔔' \
+  && pass "狭い画面でもヘッダーが残る" || fail "ヘッダーが画面外へ押し出されている"
+sidebar_hides '▸ test2' \
+  && pass "初期表示には末尾の session が入っていない" || fail "狭い画面なのに全部表示されている"
+
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "active_pane_is_sidebar" || fail "スクロール検証のためのフォーカス移動"
+for i in $(seq 1 12); do tmux -L "$T" send-keys -t term:0.0 j; done
+sidebar_shows '▸ test2' \
+  && pass "j 連打で末尾の通知までスクロールする" || fail "j 連打でも末尾が出てこない"
+sidebar_shows '↑' && pass "上に隠れた行のインジケータが出る" || fail "上向きインジケータが出ない"
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "スクロール検証後のフォーカス復帰"
+
+for i in 1 2 3 4 5 6 7 8; do
+  tmux -L "$IN" kill-window -t "test1:w$i" 2>/dev/null
+done
 tmux -L "$IN" set-option -t test1:0.0 -pu @claude-waiting || fail "2 件目の @claude-waiting の解除"
 
 echo "=== 6. 通知の解除 ==="
@@ -247,6 +310,8 @@ tmux -L "$IN" has-session -t test2 2>/dev/null \
   && pass "内側 server は無傷" || fail "内側 server が巻き添えで死んだ"
 tmux -L "$IN" list-keys -T prefix N 2>/dev/null | grep -q noroshi-outer \
   && fail "stop 後も注入キーが残っている" || pass "stop で注入キー (prefix+N) が解除された"
+tmux -L "$IN" list-keys -T prefix b 2>/dev/null | grep -q noroshi-outer \
+  && fail "stop 後も toggle キーが残っている" || pass "stop で toggle キー (prefix+b) が解除された"
 inner_hook_installed \
   && fail "stop 後も after-set-option hook が残っている" || pass "stop で after-set-option hook が解除された"
 
