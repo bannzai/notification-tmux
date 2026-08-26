@@ -27,7 +27,7 @@ CONF="${NOROSHI_OUTER_CONF:-$SPIKE_DIR/outer.conf}"
 SESSION="noroshi"
 SIDEBAR_WIDTH="${NOROSHI_SIDEBAR_WIDTH:-40}"
 INNER_CMD="${NOROSHI_INNER_TMUX_CMD:-tmux attach}"
-SIDEBAR_CMD="${NOROSHI_SIDEBAR_CMD:-printf '\n  Noroshi sidebar\n  (Phase 0 placeholder)\n\n  ここに通知一覧が入る\n'; while :; do sleep 3600; done}"
+SIDEBAR_CMD="${NOROSHI_SIDEBAR_CMD:-printf '\n  Noroshi sidebar\n  (Phase 0 placeholder)\n\n  ここに通知一覧が入る\n  (通知の受信は Phase 1)\n\n  M-o: 左右フォーカス移動\n'; while :; do sleep 3600; done}"
 
 t() { tmux -L "$SOCKET" "$@"; }
 

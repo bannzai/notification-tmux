@@ -80,6 +80,17 @@ wait_for "[ \"\$(tmux -L $IN list-windows -t inner 2>/dev/null | wc -l | tr -d '
   && pass "prefix (C-b c) が外側を素通りして内側に window が増えた" \
   || fail "prefix (C-b c) が内側に届かない"
 
+echo "=== 4b. M-o で左右フォーカス移動 (外側唯一のキーバインド) ==="
+active_pane_is_sidebar() {
+  [ "$(tmux -L "$OUT" list-panes -t noroshi:0 -f '#{pane_active}' -F '#{@noroshi-sidebar}')" = 1 ]
+}
+tmux -L "$T" send-keys -t term:0.0 M-o
+wait_for "active_pane_is_sidebar" \
+  && pass "M-o でサイドバーへフォーカスが移る" || fail "M-o でサイドバーへフォーカスが移らない"
+tmux -L "$T" send-keys -t term:0.0 M-o
+wait_for "! active_pane_is_sidebar" \
+  && pass "もう一度 M-o で内側へフォーカスが戻る" || fail "M-o で内側へフォーカスが戻らない"
+
 echo "=== 5. サイドバーのトグル ==="
 NOROSHI_OUTER_SOCKET="$OUT" bash "$SPIKE_DIR/noroshi-outer" toggle </dev/null
 [ "$(tmux -L "$OUT" list-panes -t noroshi:0 | wc -l | tr -d ' ')" = 1 ] \
