@@ -185,12 +185,18 @@ func cmdToggle(cfg Config) error {
 		return fmt.Errorf("外側 tmux がありません。先に start してください")
 	}
 	if paneID := sidebarPaneID(cfg); paneID != "" {
+		// 閉じた後のフォーカスは、残った内側 pane へ tmux が自然に移す
 		if err := cfg.outerCommand("kill-pane", "-t", paneID).Run(); err != nil {
 			return fmt.Errorf("サイドバーを閉じられません: %w", err)
 		}
 		return nil
 	}
-	return openSidebar(cfg)
+	if err := openSidebar(cfg); err != nil {
+		return err
+	}
+	// 明示的に開いた時は使いたいのはサイドバーなのでフォーカスも移す
+	// (start の初回構築は内側で作業を始めるため、右のままにしてある)
+	return focusPane(cfg, sidebarPaneID(cfg))
 }
 
 func cmdFocus(cfg Config, target string) error {

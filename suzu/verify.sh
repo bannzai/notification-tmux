@@ -151,6 +151,9 @@ wait_for "[ \"\$(outer_panes)\" = 2 ]" \
   && pass "外側 window が左右 2 pane" || fail "外側 window が左右 2 pane"
 inner_pane_shows 'INNER_READY_MARKER' \
   && pass "右 pane に内側 tmux の内容が描画される" || fail "右 pane に内側 tmux の内容が描画される"
+# 初回構築は内側で作業を始めるため、フォーカスは右のまま (toggle で開いた時だけ左へ当てる)
+! active_pane_is_sidebar \
+  && pass "start 直後のフォーカスは内側 pane" || fail "start 直後にサイドバーへフォーカスが当たっている"
 
 # 外側は ~/.tmux.conf を読まず、outer.go の設定だけが入っていること
 [ "$(tmux -L "$OUT" show-options -gv prefix)" = "None" ] \
@@ -327,14 +330,25 @@ tmux -L "$T" send-keys -t term:0.0 q
 wait_for "! active_pane_is_sidebar" || fail "5f 後のフォーカス復帰"
 
 echo "=== 5g. サイドバーの表示/非表示 (prefix+b と suzu toggle) ==="
+# 内側にフォーカスがある状態から。キーは内側 tmux の注入バインドが受ける
 tmux -L "$T" send-keys -t term:0.0 C-b b
 wait_for "[ \"\$(outer_panes)\" = 1 ]" \
-  && pass "prefix+b でサイドバーが閉じる (1 pane)" || fail "prefix+b で閉じない"
+  && pass "内側から prefix+b でサイドバーが閉じる (1 pane)" || fail "内側からの prefix+b で閉じない"
 tmux -L "$T" send-keys -t term:0.0 C-b b
 wait_for "[ \"\$(outer_panes)\" = 2 ]" \
-  && pass "prefix+b でサイドバーが再表示 (2 pane)" || fail "prefix+b で再表示されない"
+  && pass "内側から prefix+b でサイドバーが再表示 (2 pane)" || fail "内側からの prefix+b で再表示されない"
+wait_for "active_pane_is_sidebar" \
+  && pass "toggle で開いた時はサイドバーにフォーカスが当たる" || fail "開いてもフォーカスが右のまま"
 sidebar_shows '▸ test1' \
   && pass "再表示後も通知一覧を取得できている" || fail "再表示後のサイドバーが通知を出せない"
+
+# サイドバーにフォーカスがある状態から。内側にキーが届かないため、
+# 同じ prefix+b を TUI 側が解釈して閉じる
+tmux -L "$T" send-keys -t term:0.0 C-b b
+wait_for "[ \"\$(outer_panes)\" = 1 ]" \
+  && pass "サイドバーから prefix+b で閉じられる (1 pane)" || fail "サイドバーからの prefix+b で閉じない"
+tmux -L "$T" send-keys -t term:0.0 C-b b
+wait_for "[ \"\$(outer_panes)\" = 2 ]" || fail "5g の再表示"
 
 suzu toggle
 wait_for "[ \"\$(outer_panes)\" = 1 ]" \
@@ -342,10 +356,13 @@ wait_for "[ \"\$(outer_panes)\" = 1 ]" \
 suzu toggle
 wait_for "[ \"\$(outer_panes)\" = 2 ]" \
   && pass "suzu toggle でサイドバーが再表示 (2 pane)" || fail "suzu toggle で再表示されない"
-! active_pane_is_sidebar \
-  && pass "再表示後もフォーカスは内側 pane のまま" || fail "再表示後のフォーカスがサイドバーに移った"
+wait_for "active_pane_is_sidebar" \
+  && pass "suzu toggle で開いた時もサイドバーにフォーカスが当たる" || fail "suzu toggle 後のフォーカスが右のまま"
 inner_pane_shows '[test' \
   && pass "トグル後も内側 attach が生きている" || fail "トグル後に内側 attach が切れた"
+# 以降の手順は内側フォーカスから始まる前提なので戻しておく
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "5g 後のフォーカス復帰"
 
 echo "=== 5h. 画面が狭い時のスクロール ==="
 for i in 1 2 3 4 5 6 7 8; do

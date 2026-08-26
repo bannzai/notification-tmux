@@ -46,7 +46,7 @@ func TestPrefixThenJumpKeyReturnsFocus(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("prefix + jump key でフォーカスが返らない")
 	}
-	if m.awaitingJumpKey {
+	if m.awaitingPrefixKey {
 		t.Error("jump key を受けた後も prefix 待ちのままになっている")
 	}
 }
@@ -56,7 +56,7 @@ func TestPrefixAloneWaitsForJumpKey(t *testing.T) {
 	if cmd != nil {
 		t.Error("prefix だけでフォーカスが動いた")
 	}
-	if !m.awaitingJumpKey {
+	if !m.awaitingPrefixKey {
 		t.Error("prefix を受けても次のキー待ちになっていない")
 	}
 }
@@ -66,7 +66,7 @@ func TestPrefixThenOtherKeyIsCancelled(t *testing.T) {
 	if cmd != nil {
 		t.Error("prefix + jump key 以外でフォーカスが動いた")
 	}
-	if m.awaitingJumpKey {
+	if m.awaitingPrefixKey {
 		t.Error("prefix 待ちが解除されていない")
 	}
 }
@@ -144,6 +144,61 @@ func displayColumns(text string) int {
 		}
 	}
 	return columns
+}
+
+// prefix シーケンスがどの操作を選んだかは、返る actionMsg のエラー文面で見分ける
+// (socket が実在しないので、どちらの分岐も固有の失敗メッセージを返す)
+func actionError(cmd tea.Cmd) string {
+	if cmd == nil {
+		return ""
+	}
+	msg, ok := cmd().(actionMsg)
+	if !ok || msg.err == nil {
+		return ""
+	}
+	return msg.err.Error()
+}
+
+func TestPrefixThenToggleKeyClosesSidebar(t *testing.T) {
+	m := testModel()
+	m.cfg.ToggleKey = "b"
+
+	after, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB}, runesKey("b"))
+	if got := actionError(cmd); !strings.Contains(got, "先に start") {
+		t.Errorf("prefix + toggle key で toggle が呼ばれていない: %q", got)
+	}
+	if after.awaitingPrefixKey {
+		t.Error("toggle key を受けた後も prefix 待ちのままになっている")
+	}
+}
+
+func TestPrefixSequenceDistinguishesJumpAndToggle(t *testing.T) {
+	m := testModel()
+	m.cfg.ToggleKey = "b"
+
+	_, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB}, runesKey("N"))
+	if got := actionError(cmd); !strings.Contains(got, "外側 pane の列挙") {
+		t.Errorf("prefix + jump key で focusInner が呼ばれていない: %q", got)
+	}
+
+	// prefix の次が jump key でも toggle key でもなければ何も起きない
+	if _, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB}, runesKey("z")); cmd != nil {
+		t.Error("prefix + 無関係なキーで操作が走った")
+	}
+}
+
+func TestPrefixThenToggleKeyWorksWhileFiltering(t *testing.T) {
+	m := groupedModel()
+	m.cfg.ToggleKey = "b"
+	m, _ = pressKeys(m, runesKey("/"), runesKey("wo"))
+
+	after, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB}, runesKey("b"))
+	if got := actionError(cmd); !strings.Contains(got, "先に start") {
+		t.Errorf("入力モード中に prefix + toggle key が効かない: %q", got)
+	}
+	if after.query != "wo" {
+		t.Errorf("prefix + toggle key が query に取り込まれた: %q", after.query)
+	}
 }
 
 func groupedModel() model {

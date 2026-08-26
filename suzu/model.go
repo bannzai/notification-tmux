@@ -45,8 +45,8 @@ type model struct {
 	filtering bool
 	preview   []string
 	connected bool
-	// prefix を受けた直後。次の 1 キーが jump key なら内側へ戻る
-	awaitingJumpKey bool
+	// prefix を受けた直後。次の 1 キーが jump key なら内側へ戻り、toggle key なら閉じる
+	awaitingPrefixKey bool
 	// リスト表示域の先頭に来る行 (session 見出しを含む) の番号
 	offset int
 	err    error
@@ -122,15 +122,22 @@ func (m model) updateKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	if key == "ctrl+c" {
 		return m, tea.Quit
 	}
-	if m.awaitingJumpKey {
-		m.awaitingJumpKey = false
-		if key == m.cfg.JumpKey {
+	// フォーカスがサイドバーにある間は内側 tmux にキーが届かず、内側へ注入した
+	// prefix バインドが効かない。同じ prefix シーケンスをサイドバー側でも解釈して、
+	// 左右どちらにフォーカスがあっても同じキーで往復・開閉できるようにする
+	if m.awaitingPrefixKey {
+		m.awaitingPrefixKey = false
+		switch key {
+		case m.cfg.JumpKey:
 			return m, m.focusInnerCmd()
+		case m.cfg.ToggleKey:
+			// 自 pane が kill され、このプロセスごと終了する
+			return m, m.toggleCmd()
 		}
 		return m, nil
 	}
 	if key == m.prefix.Key {
-		m.awaitingJumpKey = true
+		m.awaitingPrefixKey = true
 		return m, nil
 	}
 	// 選択の上下は絞り込み中でも効かせる。フィルタで絞ってからそのまま選びたいため
@@ -239,6 +246,11 @@ func (m model) focusInnerCmd() tea.Cmd {
 func (m model) jumpCmd(n Notification) tea.Cmd {
 	cfg := m.cfg
 	return func() tea.Msg { return actionMsg{err: jump(cfg, n)} }
+}
+
+func (m model) toggleCmd() tea.Cmd {
+	cfg := m.cfg
+	return func() tea.Msg { return actionMsg{err: cmdToggle(cfg)} }
 }
 
 func (m model) previewCmd() tea.Cmd {
