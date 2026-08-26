@@ -104,18 +104,6 @@ func TestPreviewLinesEmpty(t *testing.T) {
 	}
 }
 
-func TestTruncateByWidth(t *testing.T) {
-	if got := truncate("abcdefghij", 4); got != "abcd" {
-		t.Errorf("truncate = %q, want %q", got, "abcd")
-	}
-	if got := truncate("あいうえお", 3); got != "あいう" {
-		t.Errorf("マルチバイトが rune 単位で切れていない: %q", got)
-	}
-	if got := truncate("abc", 10); got != "abc" {
-		t.Errorf("幅内の文字列が変わった: %q", got)
-	}
-}
-
 func TestParseInnerPane(t *testing.T) {
 	pane, ok := parseInnerPane("%4\t/dev/ttys004\n")
 	if !ok || pane.ID != "%4" || pane.TTY != "/dev/ttys004" {

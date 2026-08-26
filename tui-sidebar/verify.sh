@@ -62,6 +62,10 @@ sidebar_hides() {
   wait_for "! tmux -L $OUT capture-pane -p -t \"\$(sidebar_pane)\" 2>/dev/null | grep -qF -- '$1'"
 }
 
+first_sidebar_line() {
+  tmux -L "$OUT" capture-pane -p -t "$(sidebar_pane)" 2>/dev/null | head -1
+}
+
 active_pane_is_sidebar() {
   [ "$(tmux -L "$OUT" list-panes -t noroshi:0 -f '#{pane_active}' -F '#{@noroshi-sidebar}')" = 1 ]
 }
@@ -276,9 +280,9 @@ wait_for "[ \"\$(tmux -L $OUT display-message -p -t noroshi:0 '#{window_height}'
   || fail "外側が低い端末サイズに追従しない"
 
 sidebar_shows '↓' && pass "画面外に続きがあるインジケータが出る" || fail "下向きインジケータが出ない"
-# 縦が埋まっている時に描画が 1 行はみ出すと、先頭のヘッダーが押し出されて消える
-sidebar_shows 'Noroshi 🔔' \
-  && pass "狭い画面でもヘッダーが残る" || fail "ヘッダーが画面外へ押し出されている"
+# 縦が埋まっている時に描画が 1 行でもはみ出すと、先頭のヘッダーが押し出されて消える
+wait_for "first_sidebar_line | grep -q '^Noroshi'" \
+  && pass "狭い画面でも 1 行目がヘッダー" || fail "ヘッダーが画面外へ押し出されている"
 sidebar_hides '▸ test2' \
   && pass "初期表示には末尾の session が入っていない" || fail "狭い画面なのに全部表示されている"
 
@@ -294,6 +298,34 @@ wait_for "! active_pane_is_sidebar" || fail "スクロール検証後のフォ�
 for i in 1 2 3 4 5 6 7 8; do
   tmux -L "$IN" kill-window -t "test1:w$i" 2>/dev/null
 done
+
+echo "=== 5h. pane 幅を超える window 名・プレビュー行の切り詰め ==="
+# 絵文字は 2 セル。文字数で切ると幅を超えて折り返し、行数が増えて描画全体が崩れる。
+# 幅を超えた部分 (末尾のマーカー) がどこにも出ないことで、折り返していないことを確かめる
+WIDE_ID=$(tmux -L "$IN" new-window -d -P -F '#{window_id}' -t test1 \
+  -n '🔔wide-🔔-window-name-0123456789-NAMETAIL' 'exec sh') || fail "長い window 名の window 作成"
+tmux -L "$IN" set-option -t "$WIDE_ID" -p @claude-waiting '🔔09:00' || fail "長い window 名への通知 set"
+# 先頭の通知 (test1:0.0) の pane に幅を超える長い行を出し、カーソルをそこへ戻す
+LONG_LINE="/very/long/path/to/Something.xcodeproj/project.pbxproj:$(printf 'x%.0s' $(seq 1 40))PREVTAIL"
+tmux -L "$IN" send-keys -t test1:0.0 "echo $LONG_LINE" Enter
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "active_pane_is_sidebar" || fail "5h のためのフォーカス移動"
+for i in $(seq 1 5); do tmux -L "$T" send-keys -t term:0.0 k; done
+
+sidebar_shows 'wide-' \
+  && pass "長い window 名の先頭は描画される" || fail "長い window 名が描画されない"
+sidebar_hides 'NAMETAIL' \
+  && pass "pane 幅を超えた window 名が折り返さず切り詰められる" || fail "window 名が折り返している"
+sidebar_shows '/very/long/path' \
+  && pass "長いプレビュー行の先頭は描画される" || fail "長いプレビュー行が出ない"
+sidebar_hides 'PREVTAIL' \
+  && pass "pane 幅を超えたプレビュー行が折り返さず切り詰められる" || fail "プレビュー行が折り返している"
+wait_for "first_sidebar_line | grep -q '^Noroshi'" \
+  && pass "長い行があっても 1 行目はヘッダーのまま" || fail "長い行でヘッダーが押し出された"
+
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "5h 後のフォーカス復帰"
+tmux -L "$IN" kill-window -t "$WIDE_ID" 2>/dev/null
 tmux -L "$IN" set-option -t test1:0.0 -pu @claude-waiting || fail "2 件目の @claude-waiting の解除"
 
 echo "=== 6. 通知の解除 ==="

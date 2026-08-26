@@ -303,7 +303,7 @@ func (m model) View() string {
 	}
 
 	if _, previewBudget := m.layout(); previewBudget > 0 {
-		writeLine(&b, strings.Repeat("─", width), width, "")
+		writeLine(&b, rule(width), width, "")
 		// 画面が狭い時は末尾側 (新しい出力) を優先して残す
 		preview := m.preview
 		if len(preview) > previewBudget {
@@ -322,7 +322,14 @@ func (m model) View() string {
 	}
 	// 末尾の改行を残すと bubbletea が空行 1 行として数え、pane が埋まっている時に
 	// 先頭のヘッダーが押し出される
-	return strings.TrimRight(b.String(), "\n")
+	lines := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
+	// 高さ収支の計算漏れがあっても崩さないための防波堤。pane より縦長を描くと
+	// bubbletea は上端を押し出し、差分描画の残骸で行が重複する。
+	// 末尾を落として必ずヘッダー側を残す
+	if m.height > 0 && len(lines) > m.height {
+		lines = lines[:m.height]
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m model) filterLine(matched int) string {
@@ -361,10 +368,3 @@ func writeLine(b *strings.Builder, text string, width int, style string) {
 	b.WriteString("\n")
 }
 
-func truncate(text string, width int) string {
-	runes := []rune(text)
-	if len(runes) <= width {
-		return text
-	}
-	return string(runes[:width])
-}
