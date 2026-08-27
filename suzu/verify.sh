@@ -234,11 +234,27 @@ outer_render | grep -q '┃' \
 wait_for "sidebar_is_dimmed" \
   && pass "非アクティブなサイドバーが暗く描画される" || fail "非アクティブ側が暗くならない"
 
+echo "=== 5a2. 実端末のタイトルに内側 tmux のタイトルが出る ==="
+# 内側の set-titles (ユーザーの ~/.tmux.conf と同じ) が流すタイトルを外側が素通しし、
+# 実端末 (Alacritty のタブ) には従来どおり session:index:window - "pane title" が出ること
+tmux -L "$IN" set -g set-titles on
+tmux -L "$IN" select-pane -t test1:0.0 -T TITLE_MARKER
+term_title() { tmux -L "$T" display-message -p -t term:0.0 '#{pane_title}'; }
+wait_for "term_title | grep -q 'test1:0:.*TITLE_MARKER'" \
+  && pass "実端末のタイトルが内側の session:index:window - \"pane title\" になる" \
+  || fail "実端末のタイトルに内側のタイトルが出ない ($(term_title))"
+term_title | grep -q '"$' \
+  && pass "タイトルに末尾の空白が残らない (P: の空要素を落とす)" \
+  || fail "タイトルの末尾に余分な空白が残る ($(term_title))"
+
 echo "=== 5b. prefix+N でサイドバーへ → Enter でジャンプ ==="
 INNER_TTY=$(inner_pane_tty)
 tmux -L "$T" send-keys -t term:0.0 C-b N
 wait_for "active_pane_is_sidebar" \
   && pass "prefix+N でサイドバーへフォーカスが移る" || fail "prefix+N でサイドバーへフォーカスが移らない"
+term_title | grep -q 'test1:0:' \
+  && pass "サイドバーにフォーカスしても実端末のタイトルは内側のまま" \
+  || fail "サイドバーへのフォーカスでタイトルが変わった ($(term_title))"
 # window-active-style に bg=default を書くと「window-style を継承」の意味になり、
 # 両 pane が同じ背景色になってしまう。その退行をここで捕まえる
 wait_for "! sidebar_is_dimmed" \

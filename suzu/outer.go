@@ -48,6 +48,13 @@ var outerOptions = []struct {
 	// スクロールバックは内側 tmux に任せ、外側では持たない
 	{"history-limit", "0"},
 
+	// 実端末のタブ/ウィンドウタイトルは、内側 tmux が set-titles で流すタイトル
+	// (既定で session:index:window - "pane title") をそのまま出す。内側のタイトルは
+	// 右 pane の pane_title に届くので、サイドバーにフォーカスがあっても右 pane のものを選ぶ。
+	// P: は window の全 pane を空白区切りで並べるため、サイドバー分の空要素が残す末尾の空白を落とす
+	{"set-titles", "on"},
+	{"set-titles-string", "#{s/ +$//:#{P:#{?#{" + sidebarPaneOption + "},,#{pane_title}}}}"},
+
 	// どちらの pane にフォーカスがあるか分かるように、境界線と背景の両方で差をつける。
 	// 色はユーザーのライトテーマ端末 (内側 tmux の通知 hook が #effbe9 / #f5e6d0 のような
 	// 明るい背景を使う) で見た時のコントラストで選んでいる。暗い端末に移る場合は
