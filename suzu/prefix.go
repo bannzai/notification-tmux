@@ -35,6 +35,15 @@ func normalizePrefix(raw string) prefixKey {
 	return prefixKey{Display: defaultPrefix, Key: key}
 }
 
+// tmux 表記のキーを bubbletea の KeyMsg.String() 表記へ写す。
+// 写せない表記 (F1 等) は元のまま返し、従来どおり生の文字列として比較させる
+func normalizeKey(raw string) string {
+	if key, ok := bubbleteaKey(raw); ok {
+		return key
+	}
+	return raw
+}
+
 func bubbleteaKey(raw string) (string, bool) {
 	var modifier string
 	switch {
@@ -43,6 +52,10 @@ func bubbleteaKey(raw string) (string, bool) {
 	case strings.HasPrefix(raw, "M-"):
 		modifier = "alt+"
 	default:
+		// 修飾なしの単一 rune (a, N) は bubbletea でも同じ表記で届く
+		if len([]rune(raw)) == 1 {
+			return raw, true
+		}
 		return "", false
 	}
 	rest := []rune(raw[2:])

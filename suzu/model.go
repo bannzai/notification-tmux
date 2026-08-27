@@ -45,8 +45,8 @@ type model struct {
 	filtering bool
 	preview   []string
 	connected bool
-	// prefix を受けた直後。次の 1 キーが jump key なら内側へ戻る
-	awaitingJumpKey bool
+	// prefix を受けた直後。次の 1 キーが jump key なら内側へ戻り、toggle key なら閉じる
+	awaitingPrefixKey bool
 	// リスト表示域の先頭に来る行 (session 見出しを含む) の番号
 	offset int
 	err    error
@@ -75,9 +75,10 @@ func (m model) step(msg tea.Msg) (model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case notificationsMsg:
+		selected, _ := m.selected()
 		m.items = msg.items
 		m.err = msg.err
-		m = m.clampCursor()
+		m = m.restoreCursor(selected.WindowID)
 		return m, m.previewCmd()
 	case previewMsg:
 		if msg.paneID == m.selectedPaneID() {
@@ -109,29 +110,59 @@ func (m model) clampCursor() model {
 	return m
 }
 
-func (m model) selectedPaneID() string {
+// 再取得で items の並びが変わると整数の cursor は別の window を指してしまう。
+// 更新前に選んでいた window を探し直し、消えていた時だけ位置で丸める
+func (m model) restoreCursor(windowID string) model {
+	if windowID != "" {
+		for index, item := range m.visible() {
+			if item.WindowID == windowID {
+				m.cursor = index
+				return m
+			}
+		}
+	}
+	return m.clampCursor()
+}
+
+func (m model) selected() (Notification, bool) {
 	visible := m.visible()
 	if m.cursor < 0 || m.cursor >= len(visible) {
-		return ""
+		return Notification{}, false
 	}
-	return visible[m.cursor].PaneID
+	return visible[m.cursor], true
+}
+
+func (m model) selectedPaneID() string {
+	if item, ok := m.selected(); ok {
+		return item.PaneID
+	}
+	return ""
 }
 
 func (m model) updateKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	key := msg.String()
-	if key == "ctrl+c" {
-		return m, tea.Quit
-	}
-	if m.awaitingJumpKey {
-		m.awaitingJumpKey = false
-		if key == m.cfg.JumpKey {
+	// フォーカスがサイドバーにある間は内側 tmux にキーが届かず、内側へ注入した
+	// prefix バインドが効かない。同じ prefix シーケンスをサイドバー側でも解釈して、
+	// 左右どちらにフォーカスがあっても同じキーで往復・開閉できるようにする。
+	// prefix の判定を ctrl+c より先に置くのは、内側 prefix が C-c の環境でも
+	// prefix として使えるようにするため
+	if m.awaitingPrefixKey {
+		m.awaitingPrefixKey = false
+		switch key {
+		case normalizeKey(m.cfg.JumpKey):
 			return m, m.focusInnerCmd()
+		case normalizeKey(m.cfg.ToggleKey):
+			// 自 pane が kill され、このプロセスごと終了する
+			return m, m.toggleCmd()
 		}
 		return m, nil
 	}
 	if key == m.prefix.Key {
-		m.awaitingJumpKey = true
+		m.awaitingPrefixKey = true
 		return m, nil
+	}
+	if key == "ctrl+c" {
+		return m, tea.Quit
 	}
 	// 選択の上下は絞り込み中でも効かせる。フィルタで絞ってからそのまま選びたいため
 	switch key {
@@ -239,6 +270,11 @@ func (m model) focusInnerCmd() tea.Cmd {
 func (m model) jumpCmd(n Notification) tea.Cmd {
 	cfg := m.cfg
 	return func() tea.Msg { return actionMsg{err: jump(cfg, n)} }
+}
+
+func (m model) toggleCmd() tea.Cmd {
+	cfg := m.cfg
+	return func() tea.Msg { return actionMsg{err: cmdToggle(cfg)} }
 }
 
 func (m model) previewCmd() tea.Cmd {
@@ -367,4 +403,3 @@ func writeLine(b *strings.Builder, text string, width int, style string) {
 	}
 	b.WriteString("\n")
 }
-

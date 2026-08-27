@@ -11,7 +11,11 @@ LSREGISTER := /System/Library/Frameworks/CoreServices.framework/Frameworks/Launc
 # 依存先は cybozu/LicenseList でバージョンは Package.resolved で固定しているため、検証をスキップする。
 SKIP_PLUGIN_VALIDATION := -skipPackagePluginValidation
 
-.PHONY: run build test clean install
+SUZU_DIR := suzu
+SUZU_BIN := $(SUZU_DIR)/bin/suzu
+SUZU_INSTALL_DIR := $(HOME)/.local/bin
+
+.PHONY: run build test clean install cli build-cli test-cli verify-cli
 
 # ビルドして Noroshi.app を起動する
 run: build
@@ -31,4 +35,19 @@ test:
 	xcodebuild -project $(XCODEPROJ) -scheme $(SCHEME) -derivedDataPath $(DERIVED_DATA) $(SKIP_PLUGIN_VALIDATION) test
 
 clean:
-	rm -rf $(DERIVED_DATA)
+	rm -rf $(DERIVED_DATA) $(SUZU_DIR)/bin
+
+# suzu (nested tmux の額縁 + 通知サイドバー) をビルドして ~/.local/bin へ配置する
+cli: build-cli
+	mkdir -p $(SUZU_INSTALL_DIR)
+	install -m 0755 $(SUZU_BIN) $(SUZU_INSTALL_DIR)/suzu
+
+build-cli:
+	cd $(SUZU_DIR) && go build -o bin/suzu .
+
+test-cli:
+	cd $(SUZU_DIR) && go vet ./... && go test ./...
+
+# 隔離 socket だけを使う E2E。普段の tmux には触れない
+verify-cli: build-cli
+	bash $(SUZU_DIR)/verify.sh

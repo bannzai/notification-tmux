@@ -12,11 +12,11 @@ func runesKey(text string) tea.KeyMsg {
 }
 
 // socket 名は実在しないものにする。tea.Cmd を実行するテストがあるため、
-// 取り違えて普段の tmux や本番の noroshi socket へ命令が飛ばないようにする
+// 取り違えて普段の tmux や本番の suzu socket へ命令が飛ばないようにする
 func testModel() model {
 	cfg := Config{
-		InnerTmux:   []string{"tmux", "-L", "noroshi-unit-test-inner"},
-		OuterSocket: "noroshi-unit-test-outer",
+		InnerTmux:   []string{"tmux", "-L", "suzu-unit-test-inner"},
+		OuterSocket: "suzu-unit-test-outer",
 		JumpKey:     "N",
 	}
 	return newModel(cfg, normalizePrefix("C-b"))
@@ -46,7 +46,7 @@ func TestPrefixThenJumpKeyReturnsFocus(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("prefix + jump key でフォーカスが返らない")
 	}
-	if m.awaitingJumpKey {
+	if m.awaitingPrefixKey {
 		t.Error("jump key を受けた後も prefix 待ちのままになっている")
 	}
 }
@@ -56,7 +56,7 @@ func TestPrefixAloneWaitsForJumpKey(t *testing.T) {
 	if cmd != nil {
 		t.Error("prefix だけでフォーカスが動いた")
 	}
-	if !m.awaitingJumpKey {
+	if !m.awaitingPrefixKey {
 		t.Error("prefix を受けても次のキー待ちになっていない")
 	}
 }
@@ -66,7 +66,7 @@ func TestPrefixThenOtherKeyIsCancelled(t *testing.T) {
 	if cmd != nil {
 		t.Error("prefix + jump key 以外でフォーカスが動いた")
 	}
-	if m.awaitingJumpKey {
+	if m.awaitingPrefixKey {
 		t.Error("prefix 待ちが解除されていない")
 	}
 }
@@ -144,6 +144,61 @@ func displayColumns(text string) int {
 		}
 	}
 	return columns
+}
+
+// prefix シーケンスがどの操作を選んだかは、返る actionMsg のエラー文面で見分ける
+// (socket が実在しないので、どちらの分岐も固有の失敗メッセージを返す)
+func actionError(cmd tea.Cmd) string {
+	if cmd == nil {
+		return ""
+	}
+	msg, ok := cmd().(actionMsg)
+	if !ok || msg.err == nil {
+		return ""
+	}
+	return msg.err.Error()
+}
+
+func TestPrefixThenToggleKeyClosesSidebar(t *testing.T) {
+	m := testModel()
+	m.cfg.ToggleKey = "b"
+
+	after, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB}, runesKey("b"))
+	if got := actionError(cmd); !strings.Contains(got, "先に start") {
+		t.Errorf("prefix + toggle key で toggle が呼ばれていない: %q", got)
+	}
+	if after.awaitingPrefixKey {
+		t.Error("toggle key を受けた後も prefix 待ちのままになっている")
+	}
+}
+
+func TestPrefixSequenceDistinguishesJumpAndToggle(t *testing.T) {
+	m := testModel()
+	m.cfg.ToggleKey = "b"
+
+	_, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB}, runesKey("N"))
+	if got := actionError(cmd); !strings.Contains(got, "外側 pane の列挙") {
+		t.Errorf("prefix + jump key で focusInner が呼ばれていない: %q", got)
+	}
+
+	// prefix の次が jump key でも toggle key でもなければ何も起きない
+	if _, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB}, runesKey("z")); cmd != nil {
+		t.Error("prefix + 無関係なキーで操作が走った")
+	}
+}
+
+func TestPrefixThenToggleKeyWorksWhileFiltering(t *testing.T) {
+	m := groupedModel()
+	m.cfg.ToggleKey = "b"
+	m, _ = pressKeys(m, runesKey("/"), runesKey("wo"))
+
+	after, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB}, runesKey("b"))
+	if got := actionError(cmd); !strings.Contains(got, "先に start") {
+		t.Errorf("入力モード中に prefix + toggle key が効かない: %q", got)
+	}
+	if after.query != "wo" {
+		t.Errorf("prefix + toggle key が query に取り込まれた: %q", after.query)
+	}
 }
 
 func groupedModel() model {
@@ -306,6 +361,68 @@ func TestCtrlNAndCtrlPMoveCursorInBothModes(t *testing.T) {
 	}
 	if m.query != "work" {
 		t.Errorf("ctrl+n が query に取り込まれた: %q", m.query)
+	}
+}
+
+func TestNotificationRefreshKeepsSelectedWindow(t *testing.T) {
+	m := groupedModel()
+	m, _ = pressKeys(m, runesKey("j"))
+	if got := m.selectedPaneID(); got != "%2" {
+		t.Fatalf("前提が崩れている (2 件目を選べていない): %q", got)
+	}
+
+	// 再取得で先頭に別の通知が割り込むと、整数の cursor はそのままでは別 window を指す
+	refreshed, _ := m.Update(notificationsMsg{items: append(
+		[]Notification{{Session: "new", WindowID: "@9", WindowName: "incoming", PaneID: "%9"}},
+		sample()...)})
+	if got := refreshed.(model).selectedPaneID(); got != "%2" {
+		t.Errorf("更新後に選択中の window を見失っている: %q", got)
+	}
+}
+
+func TestNotificationRefreshClampsWhenSelectedWindowIsGone(t *testing.T) {
+	m := groupedModel()
+	m, _ = pressKeys(m, runesKey("j"), runesKey("j"))
+
+	refreshed, _ := m.Update(notificationsMsg{items: sample()[:1]})
+	if got := refreshed.(model).cursor; got != 0 {
+		t.Errorf("選択中 window が消えた時に丸められていない: cursor=%d", got)
+	}
+}
+
+func TestPrefixIsCheckedBeforeCtrlC(t *testing.T) {
+	// 内側 prefix が C-c の環境。C-c は quit ではなく prefix として働く
+	m := newModel(Config{JumpKey: "N", ToggleKey: "b"}, normalizePrefix("C-c"))
+
+	after, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Error("prefix であるはずの ctrl+c で quit した")
+	}
+	if !after.awaitingPrefixKey {
+		t.Error("ctrl+c が prefix として扱われていない")
+	}
+
+	// prefix が C-c でない環境では従来どおり quit する
+	if _, cmd := pressKeys(testModel(), tea.KeyMsg{Type: tea.KeyCtrlC}); cmd == nil {
+		t.Error("prefix が C-b の環境で ctrl+c が効かない")
+	}
+}
+
+func TestTmuxNotationJumpKeyMatchesBubbleteaKey(t *testing.T) {
+	// SUZU_INNER_JUMP_KEY=C-n のような tmux 表記でも、サイドバー側の判定が一致すること
+	m := testModel()
+	m.cfg.JumpKey = "C-n"
+	m.cfg.ToggleKey = "M-b"
+
+	_, jumpCmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB}, tea.KeyMsg{Type: tea.KeyCtrlN})
+	if got := actionError(jumpCmd); !strings.Contains(got, "外側 pane の列挙") {
+		t.Errorf("tmux 表記の jump key (C-n) が prefix シーケンスで効かない: %q", got)
+	}
+
+	_, toggleCmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyCtrlB},
+		tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b"), Alt: true})
+	if got := actionError(toggleCmd); !strings.Contains(got, "先に start") {
+		t.Errorf("tmux 表記の toggle key (M-b) が効かない: %q", got)
 	}
 }
 
