@@ -54,6 +54,10 @@ dump_state() {
   # 素通しされるかを見る。旧版で _ に置き換わる等の差があればここで分かる
   echo "[format separator passthrough]"
   tmux -L "$IN" list-panes -a -F "#{pane_id}$(printf '\037')#{pane_tty}" 2>&1 | od -c | head -3
+  # suzu が内側 pane と通知一覧を引く時と同じ問い合わせ (suzu/tmux.go の innerPaneFilter / waitingFilter)
+  echo "[suzu queries]"
+  tmux -L "$OUT" list-panes -t suzu:0 -f '#{?#{@suzu-sidebar},0,1}' -F '#{pane_id} #{pane_tty}' 2>&1
+  tmux -L "$IN" list-panes -a -f '#{?#{@claude-waiting},1,0}' -F '#{session_name} #{session_id} #{window_id} #{window_index} #{window_name} #{pane_id} #{@claude-waiting}' 2>&1
   echo "[pane option readback]"
   tmux -L "$IN" list-panes -a -F '#{pane_id}' 2>/dev/null | while read -r pane; do
     printf '%s local=[%s]\n' "$pane" "$(tmux -L "$IN" show-options -p -q -v -t "$pane" @claude-waiting 2>&1)"
@@ -216,8 +220,8 @@ inner_pane_shows 'INNER_READY_MARKER' \
   && pass "アクティブ pane の背景が地の色 (window-active-style)" || fail "window-active-style が bg=terminal でない"
 
 echo "=== 3b. 冪等性: start を再実行しても pane が増えない ==="
-suzu start >/dev/null 2>&1
-[ "$(outer_panes)" = 2 ] && pass "start は冪等 (2 pane のまま)" || fail "start は冪等"
+RESTART_ERR=$(suzu start 2>&1 >/dev/null)
+[ "$(outer_panes)" = 2 ] && pass "start は冪等 (2 pane のまま)" || fail "start は冪等 (stderr: $RESTART_ERR)"
 
 inner_key_installed N && pass "内側に prefix+N のジャンプキーが注入されている" || fail "ジャンプキーの注入"
 inner_key_installed b && pass "内側に prefix+b の toggle キーが注入されている" || fail "toggle キーの注入"

@@ -274,13 +274,16 @@ func initializeOuter(cfg Config) error {
 // サイドバーが残るため額縁自体は生きている。次の start で右 pane を作り直す。
 // サイドバーが無い時 (toggle で閉じた状態) は触らない
 func restoreInnerPane(cfg Config) error {
-	if _, err := fetchInnerPane(cfg); err == nil {
+	_, missing := fetchInnerPane(cfg)
+	if missing == nil {
 		return nil
 	}
 	sidebar := sidebarPaneID(cfg)
 	if sidebar == "" {
 		return nil
 	}
+	// 壊れた socket の自己修復と同じく、黙って構成を変えずに理由を残す
+	fmt.Fprintf(os.Stderr, "内側 pane が見つからないため作り直します (%v)\n", missing)
 	if err := runTmux(cfg.outerCommand("split-window", "-h", "-d", "-t", outerWindow,
 		"TMUX= "+cfg.InnerAttach)); err != nil {
 		return fmt.Errorf("内側 pane の再作成に失敗: %w", err)
