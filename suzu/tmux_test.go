@@ -82,6 +82,15 @@ func TestParseNotificationsSkipsBrokenLines(t *testing.T) {
 	}
 }
 
+func TestParseNotificationsAcceptsEscapedSeparator(t *testing.T) {
+	// tmux 3.4 は区切りの制御文字を 8 進表記 (\037) で出す
+	out := `work\037$1\037@3\0370\037claude\037%5\037🔔` + "\n"
+	items := parseNotifications(out, paneOptions(nil))
+	if len(items) != 1 || items[0].WindowID != "@3" || items[0].PaneID != "%5" || items[0].Icon != "🔔" {
+		t.Fatalf("可視化表記の区切りをパースできない: %+v", items)
+	}
+}
+
 func TestParseNotificationsEmpty(t *testing.T) {
 	if items := parseNotifications("", paneOptions(nil)); len(items) != 0 {
 		t.Fatalf("空出力で通知が生えた: %+v", items)
@@ -212,6 +221,11 @@ func TestParseInnerPane(t *testing.T) {
 	pane, ok := parseInnerPane("%4" + fieldSeparator + "/dev/ttys004\n")
 	if !ok || pane.ID != "%4" || pane.TTY != "/dev/ttys004" {
 		t.Fatalf("右 pane のパースが誤り: %+v ok=%v", pane, ok)
+	}
+	// tmux 3.4 は区切りの制御文字を 8 進表記 (\037) で出す
+	pane, ok = parseInnerPane(`%4\037/dev/pts/3` + "\n")
+	if !ok || pane.ID != "%4" || pane.TTY != "/dev/pts/3" {
+		t.Fatalf("可視化表記の区切りをパースできない: %+v ok=%v", pane, ok)
 	}
 	if _, ok := parseInnerPane(""); ok {
 		t.Error("空出力を pane として受け入れている")

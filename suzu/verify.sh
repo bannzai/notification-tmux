@@ -663,25 +663,21 @@ tmux -L "$BROKEN" -f /dev/null new-session -d -s dummy -x 80 -y 24 'exec sh' || 
 kill -9 "$(tmux -L "$BROKEN" display-message -p '#{pid}')" 2>/dev/null
 wait_for "! tmux -L $BROKEN has-session 2>/dev/null" || fail "使い捨て server が死なない"
 rm -f "$(socket_path "$BROKEN")" && : > "$(socket_path "$BROKEN")"
-tmux -L "$BROKEN" -f /dev/null new-session -d -s probe -x 80 -y 24 'exec sh' 2>/dev/null \
-  && fail "前提が崩れている (素の tmux が起動できてしまう)" \
-  || pass "壊れた socket では素の tmux が起動できない"
-
-# macOS では壊れたファイルが残ったままになり suzu が取り除く。Linux では素の tmux の失敗
-# (connect が ECONNREFUSED) の時点で tmux 自身がファイルを unlink するため、suzu の
-# 出番が無く報告も出ない。ファイルが残っていた時だけ報告を要求する
-BROKEN_LEFT=0
-[ -e "$(socket_path "$BROKEN")" ] && BROKEN_LEFT=1
-BROKEN_OUT=$(suzu_on_socket "$BROKEN" start 2>&1)
-if [ "$BROKEN_LEFT" = 1 ]; then
+# この状態は macOS 固有 (connect が ENOTSOCK で失敗し tmux はファイルを残す)。Linux では
+# connect が ECONNREFUSED になり tmux 自身がファイルを unlink して起動できてしまうため、
+# suzu の自己修復の出番が無い。起動できた OS では検査を飛ばす
+if tmux -L "$BROKEN" -f /dev/null new-session -d -s probe -x 80 -y 24 'exec sh' 2>/dev/null; then
+  pass "この OS では素の tmux が壊れた socket ファイルを自分で片付ける (suzu の自己修復は対象外)"
+  tmux -L "$BROKEN" kill-server 2>/dev/null
+else
+  pass "壊れた socket では素の tmux が起動できない"
+  BROKEN_OUT=$(suzu_on_socket "$BROKEN" start 2>&1)
   echo "$BROKEN_OUT" | grep -q '取り除いて起動し直しました' \
     && pass "壊れた socket を取り除いた旨を報告する" || fail "自己修復の報告が出ない"
-else
-  pass "壊れた socket は素の tmux の失敗時に tmux 自身が片付けた (この OS では suzu の報告は不要)"
+  wait_for "[ \"\$(panes_on $BROKEN)\" = 2 ]" \
+    && pass "壊れた socket を自己修復して額縁を構築できる" || fail "壊れた socket から復旧できない"
+  suzu_on_socket "$BROKEN" stop >/dev/null 2>&1
 fi
-wait_for "[ \"\$(panes_on $BROKEN)\" = 2 ]" \
-  && pass "壊れた socket を自己修復して額縁を構築できる" || fail "壊れた socket から復旧できない"
-suzu_on_socket "$BROKEN" stop >/dev/null 2>&1
 
 # 修復できない時は tmux の stderr と対処ヒントを添えて失敗する。
 # 中身のあるディレクトリなら suzu の unlink も失敗し、再試行できない状態を作れる
