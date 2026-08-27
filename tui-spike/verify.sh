@@ -45,9 +45,13 @@ wait_for "tmux -L $IN capture-pane -p -t inner:0.0 2>/dev/null | grep -q INNER_R
   && pass "内側 server 起動" || fail "内側 server 起動"
 
 echo "=== 2. noroshi-outer start で外側を構築 (非 tty なので attach はしない) ==="
+# 本スクリプトは Phase 0 (額縁 + プレースホルダ) の検証。tui-sidebar のバイナリが
+# ビルド済みだと noroshi-outer がそちらを採用してしまうため、プレースホルダを明示的に固定する
+PLACEHOLDER_CMD="NOROSHI_OUTER_SOCKET='$OUT' bash '$SPIKE_DIR/sidebar-placeholder.sh'"
 NOROSHI_OUTER_SOCKET="$OUT" \
 NOROSHI_INNER_TMUX="tmux -L $IN" \
 NOROSHI_INNER_TMUX_CMD="tmux -L $IN attach -t inner" \
+NOROSHI_SIDEBAR_CMD="$PLACEHOLDER_CMD" \
   bash "$SPIKE_DIR/noroshi-outer" start </dev/null || fail "noroshi-outer start"
 
 wait_for "[ \"\$(tmux -L $OUT list-panes -t noroshi:0 2>/dev/null | wc -l | tr -d ' ')\" = 2 ]" \
@@ -65,6 +69,7 @@ echo "=== 3. 冪等性: start を再実行しても pane が増えない ==="
 NOROSHI_OUTER_SOCKET="$OUT" \
 NOROSHI_INNER_TMUX="tmux -L $IN" \
 NOROSHI_INNER_TMUX_CMD="tmux -L $IN attach -t inner" \
+NOROSHI_SIDEBAR_CMD="$PLACEHOLDER_CMD" \
   bash "$SPIKE_DIR/noroshi-outer" start </dev/null >/dev/null 2>&1
 [ "$(tmux -L "$OUT" list-panes -t noroshi:0 | wc -l | tr -d ' ')" = 2 ] \
   && pass "start は冪等 (2 pane のまま)" || fail "start は冪等"
@@ -93,17 +98,46 @@ active_pane_is_sidebar() {
 tmux -L "$T" send-keys -t term:0.0 C-b N
 wait_for "active_pane_is_sidebar" \
   && pass "prefix+N でサイドバーへフォーカスが移る" || fail "prefix+N でサイドバーへフォーカスが移らない"
-# サイドバー (プレースホルダ) は何かキーで内側へ戻す
-tmux -L "$T" send-keys -t term:0.0 x
+# サイドバーは q で内側へ戻す (プレースホルダは任意キー、Phase 1 の TUI は q/Esc/prefix+N)
+tmux -L "$T" send-keys -t term:0.0 q
 wait_for "! active_pane_is_sidebar" \
-  && pass "サイドバーで何かキーを押すと内側へフォーカスが戻る" || fail "サイドバーから内側へフォーカスが戻らない"
+  && pass "サイドバーで q を押すと内側へフォーカスが戻る" || fail "サイドバーから内側へフォーカスが戻らない"
+
+echo "=== 4c. どちらにフォーカスがあるか見分けられる (境界線と背景) ==="
+# 実端末に届く描画そのもの (T の pane) を見る。window-style は pane の grid には残らず
+# client への描画時にだけ乗るため、外側の capture-pane では検出できない
+outer_render() { tmux -L "$T" capture-pane -e -p -t term:0.0 2>/dev/null; }
+# 描画の 1 行には左右両方の pane が入っているため、境界線で切って左半分だけを見る
+sidebar_render_segment() {
+  local line
+  line=$(outer_render | grep -m1 Noroshi)
+  printf '%s' "${line%%┃*}"
+}
+sidebar_is_dimmed() { sidebar_render_segment | grep -q '48;5;253'; }
+
+outer_render | grep -q '┃' \
+  && pass "境界線が太罫線 (pane-border-lines heavy)" || fail "境界線が太罫線になっていない"
+wait_for "sidebar_is_dimmed" \
+  && pass "非アクティブなサイドバーが暗く描画される" || fail "非アクティブ側が暗くならない"
+
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "active_pane_is_sidebar" || fail "4c のためのフォーカス移動"
+wait_for "outer_render | grep -q '38;5;202'" \
+  && pass "アクティブ側の境界線が強調色になる" || fail "アクティブ側の境界線が強調されない"
+# window-active-style に bg=default を書くと「window-style を継承」の意味になり、
+# 両 pane が同じ背景色になってしまう。その退行をここで捕まえる
+wait_for "! sidebar_is_dimmed" \
+  && pass "アクティブになったサイドバーは暗くならない" \
+  || fail "アクティブ側まで暗いまま (window-active-style が効いていない)"
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "4c 後のフォーカス復帰"
 
 echo "=== 5. サイドバーのトグル ==="
-NOROSHI_OUTER_SOCKET="$OUT" bash "$SPIKE_DIR/noroshi-outer" toggle </dev/null
+NOROSHI_OUTER_SOCKET="$OUT" NOROSHI_SIDEBAR_CMD="$PLACEHOLDER_CMD" bash "$SPIKE_DIR/noroshi-outer" toggle </dev/null
 [ "$(tmux -L "$OUT" list-panes -t noroshi:0 | wc -l | tr -d ' ')" = 1 ] \
   && pass "toggle でサイドバーが閉じる (1 pane)" || fail "toggle でサイドバーが閉じる"
 
-NOROSHI_OUTER_SOCKET="$OUT" bash "$SPIKE_DIR/noroshi-outer" toggle </dev/null
+NOROSHI_OUTER_SOCKET="$OUT" NOROSHI_SIDEBAR_CMD="$PLACEHOLDER_CMD" bash "$SPIKE_DIR/noroshi-outer" toggle </dev/null
 [ "$(tmux -L "$OUT" list-panes -t noroshi:0 | wc -l | tr -d ' ')" = 2 ] \
   && pass "toggle でサイドバーが再表示 (2 pane)" || fail "toggle でサイドバーが再表示"
 
