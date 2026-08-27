@@ -73,16 +73,20 @@ func TestExportedEnvCarriesExplicitOverridesOnly(t *testing.T) {
 }
 
 func TestFindPrefixKeyBindingMatchesWholeKey(t *testing.T) {
-	out := `bind-key -T prefix N run-shell "SUZU_OUTER_SOCKET='suzu' /usr/local/bin/suzu focus sidebar"
-bind-key -T prefix Nx display-message 'other'
-bind-key -T prefix b run-shell "SUZU_OUTER_SOCKET='suzu' /usr/local/bin/suzu toggle"
-bind-key -T prefix n next-window
+	// tmux 3.6a の実出力どおり列が空白で揃えられている
+	out := `bind-key    -T prefix N       run-shell "SUZU_OUTER_SOCKET='suzu' /usr/local/bin/suzu focus sidebar"
+bind-key    -T prefix Nx      display-message 'other'
+bind-key -r -T prefix b       run-shell "SUZU_OUTER_SOCKET='suzu' /usr/local/bin/suzu toggle"
+bind-key    -T prefix n       next-window
 `
 	if got := findPrefixKeyBinding(out, "N"); !strings.Contains(got, "focus sidebar") {
 		t.Fatalf("N の bind を引けていない: %q", got)
 	}
-	if got := findPrefixKeyBinding(out, "n"); got != "bind-key -T prefix n next-window" {
+	if got := findPrefixKeyBinding(out, "n"); got != "bind-key    -T prefix n       next-window" {
 		t.Fatalf("大文字小文字を区別できていない: %q", got)
+	}
+	if got := findPrefixKeyBinding(out, "b"); !strings.Contains(got, "toggle") {
+		t.Fatalf("-r 付きの bind を引けていない: %q", got)
 	}
 	if got := findPrefixKeyBinding(out, "Z"); got != "" {
 		t.Fatalf("未束縛のキーで bind が返った: %q", got)

@@ -49,7 +49,7 @@ dump_state() {
   tmux -L "$IN" list-clients -F '#{client_name} control=#{client_control_mode} tty=#{client_tty}' 2>&1
   echo "[inner hooks/keys]"
   tmux -L "$IN" show-hooks -g after-set-option 2>&1
-  tmux -L "$IN" list-keys -T prefix 2>&1 | grep -E "^bind-key -T prefix (N|b|Z) "
+  tmux -L "$IN" list-keys -T prefix 2>&1 | grep -E "^bind-key +(-r +)?-T +prefix +(N|b|Z) "
   # suzu が使う format の区切り (US, 0x1f) と pane option の読み出しが、この tmux 版で
   # 素通しされるかを見る。旧版で _ に置き換わる等の差があればここで分かる
   echo "[format separator passthrough]"
@@ -168,7 +168,7 @@ inner_hook_installed() {
 }
 
 inner_key_installed() {
-  tmux -L "$IN" list-keys -T prefix 2>/dev/null | grep -E "^bind-key -T prefix $1 " | grep -qF -- "$SUZU_BIN"
+  tmux -L "$IN" list-keys -T prefix 2>/dev/null | grep -E "^bind-key +(-r +)?-T +prefix +$1 " | grep -qF -- "$SUZU_BIN"
 }
 
 echo "=== 1. suzu をビルド ==="
@@ -590,7 +590,7 @@ inner_key_installed b \
   && fail "stop 後も toggle キーが残っている" || pass "stop で toggle キー (prefix+b) が解除された"
 [ "$(doorbell_hook_count)" = 0 ] \
   && pass "stop で doorbell hook が解除された" || fail "stop 後も doorbell hook が残っている"
-tmux -L "$IN" list-keys -T prefix 2>/dev/null | grep -E "^bind-key -T prefix Z " | grep -q USER_BIND_MARKER \
+tmux -L "$IN" list-keys -T prefix 2>/dev/null | grep -E "^bind-key +(-r +)?-T +prefix +Z " | grep -q USER_BIND_MARKER \
   && pass "ユーザー自身の bind は残る" || fail "ユーザー自身の bind まで消した"
 tmux -L "$IN" show-hooks -g after-set-option 2>/dev/null | grep -q USER_HOOK_MARKER \
   && pass "ユーザー自身の after-set-option hook は残る" || fail "ユーザー自身の hook まで消した"
@@ -599,7 +599,7 @@ tmux -L "$IN" unbind-key Z 2>/dev/null
 echo "=== 7b. suzu のものでない bind は stop で触らず、上書き時は警告する ==="
 tmux -L "$IN" bind-key N display-message 'USER_JUMP_MARKER' || fail "ユーザーのジャンプキー bind の仕込み"
 suzu stop >/dev/null
-tmux -L "$IN" list-keys -T prefix 2>/dev/null | grep -E "^bind-key -T prefix N " | grep -q USER_JUMP_MARKER \
+tmux -L "$IN" list-keys -T prefix 2>/dev/null | grep -E "^bind-key +(-r +)?-T +prefix +N " | grep -q USER_JUMP_MARKER \
   && pass "suzu のものでない prefix+N は stop で消さない" || fail "ユーザーの prefix+N を消した"
 
 WARN=$(suzu start 2>&1 >/dev/null)

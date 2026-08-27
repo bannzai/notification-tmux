@@ -170,12 +170,18 @@ func prefixKeyBinding(cfg Config, key string) string {
 	return findPrefixKeyBinding(out, key)
 }
 
+// list-keys は列を空白で揃えて出す (bind-key    -T prefix N       run-shell ...) ため、
+// 空白区切りの語で「-T prefix <key>」の並びを探す。-r (repeat) は -T の前に付く
 func findPrefixKeyBinding(listKeysOutput string, key string) string {
-	prefix := "bind-key -T prefix " + key + " "
 	for _, line := range strings.Split(listKeysOutput, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, prefix) {
-			return line
+		words := strings.Fields(line)
+		for i := 0; i+2 < len(words); i++ {
+			if words[i] == "-T" {
+				if words[i+1] == "prefix" && words[i+2] == key {
+					return strings.TrimSpace(line)
+				}
+				break
+			}
 		}
 	}
 	return ""
