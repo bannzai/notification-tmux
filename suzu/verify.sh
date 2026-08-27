@@ -30,7 +30,28 @@ DOORBELL="$DOORBELL_DIR/doorbell"
 FAIL=0
 
 pass() { echo "PASS: $1"; }
-fail() { echo "FAIL: $1"; FAIL=1; }
+fail() {
+  echo "FAIL: $1"
+  # 最初の失敗時点の状態だけ残す。手元で再現せず CI のログだけで切り分けるための材料
+  [ "$FAIL" = 0 ] && dump_state
+  FAIL=1
+}
+
+dump_state() {
+  echo "--- state at first failure (tmux $(tmux -V 2>&1)) ---"
+  echo "[outer panes]"
+  tmux -L "$OUT" list-panes -a -F '#{session_name}:#{window_index}.#{pane_index} #{pane_id} sidebar=#{@suzu-sidebar} active=#{pane_active} #{pane_width}x#{pane_height} cmd=#{pane_current_command} dead=#{pane_dead} title=#{pane_title}' 2>&1
+  echo "[sidebar screen]"
+  tmux -L "$OUT" capture-pane -p -t "$(tmux -L "$OUT" list-panes -t suzu:0 -f '#{@suzu-sidebar}' -F '#{pane_id}' 2>/dev/null | head -1)" 2>&1
+  echo "[inner sessions]"
+  tmux -L "$IN" list-panes -a -F '#{session_name} #{session_id} #{window_id} #{window_name} #{pane_id} waiting=#{@claude-waiting}' 2>&1
+  echo "[inner clients]"
+  tmux -L "$IN" list-clients -F '#{client_name} control=#{client_control_mode} tty=#{client_tty}' 2>&1
+  echo "[inner hooks/keys]"
+  tmux -L "$IN" show-hooks -g after-set-option 2>&1
+  tmux -L "$IN" list-keys -T prefix N 2>&1
+  echo "--- end state ---"
+}
 
 # tmux 本体と同じ規則で socket のパスを組む
 socket_path() { echo "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$1"; }
