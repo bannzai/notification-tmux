@@ -52,9 +52,20 @@ jobs:
           cache-dependency-path: suzu/go.sum
       - name: tmux をインストールする (brew)
         if: matrix.tmux.install == 'brew'
+        # runner の Homebrew は PATH に入っていないため shellenv で通す。
+        # Homebrew が無い image では公式配布のソース tarball からビルドする
         run: |
-          brew install tmux
-          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          if [ -x /home/linuxbrew/.linuxbrew/bin/brew ]; then
+            eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+            brew install tmux
+            echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+          else
+            sudo apt-get update
+            sudo apt-get install -y libevent-dev libncurses-dev bison pkg-config libutf8proc-dev
+            curl -sSL -o /tmp/tmux.tar.gz https://github.com/tmux/tmux/releases/download/3.6a/tmux-3.6a.tar.gz
+            tar xzf /tmp/tmux.tar.gz -C /tmp
+            cd /tmp/tmux-3.6a && ./configure --enable-utf8proc && make -j"$(nproc)" && sudo make install
+          fi
       - name: tmux をインストールする (apt)
         if: matrix.tmux.install == 'apt'
         run: |

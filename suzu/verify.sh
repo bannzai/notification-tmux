@@ -50,6 +50,14 @@ dump_state() {
   echo "[inner hooks/keys]"
   tmux -L "$IN" show-hooks -g after-set-option 2>&1
   tmux -L "$IN" list-keys -T prefix N 2>&1
+  # suzu が使う format の区切り (US, 0x1f) と pane option の読み出しが、この tmux 版で
+  # 素通しされるかを見る。旧版で _ に置き換わる等の差があればここで分かる
+  echo "[format separator passthrough]"
+  tmux -L "$IN" list-panes -a -F "#{pane_id}$(printf '\037')#{pane_tty}" 2>&1 | od -c | head -3
+  echo "[pane option readback]"
+  tmux -L "$IN" list-panes -a -F '#{pane_id}' 2>/dev/null | while read -r pane; do
+    printf '%s local=[%s]\n' "$pane" "$(tmux -L "$IN" show-options -p -q -v -t "$pane" @claude-waiting 2>&1)"
+  done
   echo "--- end state ---"
 }
 
