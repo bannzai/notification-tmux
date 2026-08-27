@@ -57,6 +57,7 @@ dump_state() {
   # suzu が内側 pane と通知一覧を引く時と同じ問い合わせ (suzu/tmux.go の innerPaneFilter / waitingFilter)
   echo "[suzu queries]"
   tmux -L "$OUT" list-panes -t suzu:0 -f '#{?#{@suzu-sidebar},0,1}' -F '#{pane_id} #{pane_tty}' 2>&1
+  tmux -L "$OUT" list-panes -t suzu:0 -f '#{?#{@suzu-sidebar},0,1}' -F "#{pane_id}$(printf '\037')#{pane_tty}" 2>&1 | od -c | head -3
   tmux -L "$IN" list-panes -a -f '#{?#{@claude-waiting},1,0}' -F '#{session_name} #{session_id} #{window_id} #{window_index} #{window_name} #{pane_id} #{@claude-waiting}' 2>&1
   echo "[pane option readback]"
   tmux -L "$IN" list-panes -a -F '#{pane_id}' 2>/dev/null | while read -r pane; do
@@ -666,9 +667,18 @@ tmux -L "$BROKEN" -f /dev/null new-session -d -s probe -x 80 -y 24 'exec sh' 2>/
   && fail "前提が崩れている (素の tmux が起動できてしまう)" \
   || pass "壊れた socket では素の tmux が起動できない"
 
+# macOS では壊れたファイルが残ったままになり suzu が取り除く。Linux では素の tmux の失敗
+# (connect が ECONNREFUSED) の時点で tmux 自身がファイルを unlink するため、suzu の
+# 出番が無く報告も出ない。ファイルが残っていた時だけ報告を要求する
+BROKEN_LEFT=0
+[ -e "$(socket_path "$BROKEN")" ] && BROKEN_LEFT=1
 BROKEN_OUT=$(suzu_on_socket "$BROKEN" start 2>&1)
-echo "$BROKEN_OUT" | grep -q '取り除いて起動し直しました' \
-  && pass "壊れた socket を取り除いた旨を報告する" || fail "自己修復の報告が出ない"
+if [ "$BROKEN_LEFT" = 1 ]; then
+  echo "$BROKEN_OUT" | grep -q '取り除いて起動し直しました' \
+    && pass "壊れた socket を取り除いた旨を報告する" || fail "自己修復の報告が出ない"
+else
+  pass "壊れた socket は素の tmux の失敗時に tmux 自身が片付けた (この OS では suzu の報告は不要)"
+fi
 wait_for "[ \"\$(panes_on $BROKEN)\" = 2 ]" \
   && pass "壊れた socket を自己修復して額縁を構築できる" || fail "壊れた socket から復旧できない"
 suzu_on_socket "$BROKEN" stop >/dev/null 2>&1
@@ -678,8 +688,10 @@ suzu_on_socket "$BROKEN" stop >/dev/null 2>&1
 rm -f "$(socket_path "$BROKEN")"
 mkdir -p "$(socket_path "$BROKEN")/occupied"
 UNFIXABLE=$(suzu_on_socket "$BROKEN" start 2>&1)
-echo "$UNFIXABLE" | grep -q 'Socket operation on non-socket' \
-  && pass "失敗時に tmux の stderr が出る" || fail "tmux の stderr が握りつぶされている"
+# tmux の stderr は OS で文言が変わる (macOS: Socket operation on non-socket、
+# Linux: unlink や connect の別の errno) ため、tmux が失敗理由に必ず含める socket のパスで判定する
+echo "$UNFIXABLE" | grep -qF "$(socket_path "$BROKEN")" \
+  && pass "失敗時に tmux の stderr が出る" || fail "tmux の stderr が握りつぶされている ($UNFIXABLE)"
 echo "$UNFIXABLE" | grep -q 'ps ax | grep' \
   && pass "失敗時に残骸の調べ方を案内する" || fail "対処ヒントが出ない"
 rmdir "$(socket_path "$BROKEN")/occupied" "$(socket_path "$BROKEN")" 2>/dev/null
