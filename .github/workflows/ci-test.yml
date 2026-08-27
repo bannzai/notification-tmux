@@ -1,0 +1,44 @@
+name: CI Test (suzu)
+
+on:
+  pull_request:
+    paths:
+      - "suzu/**"
+      - "Makefile"
+      - ".github/workflows/ci-test.yml"
+  push:
+    branches: [main]
+    paths:
+      - "suzu/**"
+      - "Makefile"
+      - ".github/workflows/ci-test.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: suzu/go.mod
+          cache-dependency-path: suzu/go.sum
+      - name: gofmt の差分が無いことを確認する
+        run: |
+          unformatted=$(gofmt -l suzu)
+          if [ -n "$unformatted" ]; then
+            echo "$unformatted"
+            echo "::error::gofmt で整形されていないファイルがあります"
+            exit 1
+          fi
+      - name: go vet と単体テストを実行する
+        run: make test-cli
+      - name: ビルドする
+        run: make build-cli

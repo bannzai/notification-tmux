@@ -36,15 +36,23 @@ fail() { echo "FAIL: $1"; FAIL=1; }
 socket_path() { echo "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$1"; }
 
 cleanup() {
-  tmux -L "$T" kill-server 2>/dev/null
-  tmux -L "$X" kill-server 2>/dev/null
-  tmux -L "$OUT" kill-server 2>/dev/null
-  tmux -L "$STALE" kill-server 2>/dev/null
-  tmux -L "$BROKEN" kill-server 2>/dev/null
-  tmux -L "$IN" kill-server 2>/dev/null
-  rm -f "$(socket_path "$STALE")" "$(socket_path "$BROKEN")"
+  local socket
+  for socket in "$T" "$X" "$OUT" "$STALE" "$BROKEN" "$IN"; do
+    tmux -L "$socket" kill-server 2>/dev/null
+  done
+  # kill-server は socket 経由の命令なので、socket が壊れた server や、server が消えた後も
+  # 残る control mode client (サイドバーが張る -C attach) には届かない。完走後にも
+  # 内側 server が残った実例があるため、このスクリプトの隔離 socket 名を持つ
+  # tmux プロセスをプロセス一覧から直接落とす (socket 名は $$ 付きで一意)。
+  # $$( と書くと bash がコマンド置換として読むため ${$} で参照する
+  pkill -f "tmux -L szv-[a-z]+-${$}( |\$)" 2>/dev/null
+  for socket in "$T" "$X" "$OUT" "$STALE" "$BROKEN" "$IN"; do
+    rm -f "$(socket_path "$socket")"
+  done
   rm -rf "$DOORBELL_DIR"
 }
+# Ctrl-C や timeout の SIGTERM で中断された時も EXIT trap を通して後片付けする
+trap 'exit 130' INT TERM
 trap cleanup EXIT
 
 # suzu を隔離 socket 向けの環境で実行する

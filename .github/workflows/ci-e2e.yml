@@ -1,0 +1,48 @@
+name: CI E2E (suzu)
+
+# suzu/verify.sh は隔離 socket の tmux だけを使う E2E で 1〜2 分で終わるため、PR ごとに回す。
+# Linux runner で完結し macOS runner の課金を伴わない
+on:
+  pull_request:
+    paths:
+      - "suzu/**"
+      - "Makefile"
+      - ".github/workflows/ci-e2e.yml"
+  push:
+    branches: [main]
+    paths:
+      - "suzu/**"
+      - "Makefile"
+      - ".github/workflows/ci-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # runner の既定 locale は未設定で tmux が非 UTF-8 扱いになり、verify.sh が使う
+  # 絵文字・日本語の window 名が _ にサニタイズされて照合が崩れる
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: suzu/go.mod
+          cache-dependency-path: suzu/go.sum
+      - name: tmux をインストールする
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
+          tmux -V
+      - name: 隔離 socket の E2E (verify.sh) を実行する
+        run: make verify-cli
