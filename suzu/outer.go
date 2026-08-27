@@ -143,21 +143,42 @@ func installInnerKeys(cfg Config) {
 // キーは env で変更できるため、ユーザー自身の bind とぶつかり得る。
 // 上書きは行うが、黙って奪わないよう知らせる
 func warnKeyOverride(cfg Config, key string) {
-	out, err := output(cfg.innerCommand("list-keys", "-T", "prefix", key))
-	if err != nil || strings.Contains(out, injectedKeyMarker) {
+	binding := prefixKeyBinding(cfg, key)
+	if binding == "" || strings.Contains(binding, injectedKeyMarker) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "内側 tmux の prefix+%s には既存の bind があります。suzu のバインドで上書きします: %s\n",
-		key, strings.TrimSpace(out))
+		key, binding)
 }
 
 // 自分が注入した bind の時だけ解除する
 func unbindInjectedKey(cfg Config, key string) {
-	out, err := output(cfg.innerCommand("list-keys", "-T", "prefix", key))
-	if err != nil || !strings.Contains(out, injectedKeyMarker) {
+	if !strings.Contains(prefixKeyBinding(cfg, key), injectedKeyMarker) {
 		return
 	}
 	cfg.innerCommand("unbind-key", key).Run()
+}
+
+// prefix テーブルで key に束縛されている bind-key 行 (未束縛なら空)。
+// list-keys にキーを渡して 1 件だけ引く形は tmux 3.7 で何も出力しなくなったため、
+// テーブル全体を出して自分で探す
+func prefixKeyBinding(cfg Config, key string) string {
+	out, err := output(cfg.innerCommand("list-keys", "-T", "prefix"))
+	if err != nil {
+		return ""
+	}
+	return findPrefixKeyBinding(out, key)
+}
+
+func findPrefixKeyBinding(listKeysOutput string, key string) string {
+	prefix := "bind-key -T prefix " + key + " "
+	for _, line := range strings.Split(listKeysOutput, "\n") {
+		line = strings.TrimSpace(line)
+		if strings.HasPrefix(line, prefix) {
+			return line
+		}
+	}
+	return ""
 }
 
 // 内側 tmux の「どこかで set-option された」を doorbell ファイルへ伝える hook を注入する
