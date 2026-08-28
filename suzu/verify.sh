@@ -239,8 +239,11 @@ inner_pane_shows 'INNER_READY_MARKER' \
   && pass "アクティブ pane の背景が地の色 (window-active-style)" || fail "window-active-style が bg=terminal でない"
 
 echo "=== 3b. 冪等性: start を再実行しても pane が増えない ==="
+# 旧版バイナリが構築した外側には古い設定値が残る。start の再実行で最新値へ揃うことを見る
+tmux -L "$OUT" set-option -g set-clipboard external
 RESTART_ERR=$(suzu start 2>&1 >/dev/null)
 [ "$(outer_panes)" = 2 ] && pass "start は冪等 (2 pane のまま)" || fail "start は冪等 (stderr: $RESTART_ERR)"
+[ "$(tmux -L "$OUT" show-options -gv set-clipboard)" = "on" ] && pass "start の再実行で外側の設定が再適用される (旧版で構築した外側にも最新値が入る)" || fail "start の再実行で外側の設定が再適用されない (set-clipboard=$(tmux -L "$OUT" show-options -gv set-clipboard))"
 
 inner_key_installed N && pass "内側に prefix+N のジャンプキーが注入されている" || fail "ジャンプキーの注入"
 inner_key_installed b && pass "内側に prefix+b の toggle キーが注入されている" || fail "toggle キーの注入"
