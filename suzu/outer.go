@@ -35,9 +35,14 @@ var outerOptions = []struct {
 	// (内側 client は mouse を掴んでいるため wheel/クリックは内側へ転送される)
 	{"mouse", "on"},
 
-	// 内側 tmux からの escape sequence (OSC52 等) を実端末へ透過する
+	// 内側 tmux からの escape sequence (OSC52 等) を実端末へ透過する。
+	// set-clipboard は on にする: external だと tmux は「pane 内のアプリが出す OSC52」を
+	// 無視する (input_osc_52 は state != on で即 return)。外側から見た内側 tmux は
+	// pane 内のアプリなので、内側のコピーで出る OSC52 は external では実端末へ届かない
+	// (verify.sh の 5j で実測)。on にすると外側にも paste buffer が溜まるが、
+	// 外側は buffer を使わないため害は無い
 	{"allow-passthrough", "all"},
-	{"set-clipboard", "external"},
+	{"set-clipboard", "on"},
 
 	// nested での ESC 遅延をなくす
 	{"escape-time", "0"},
