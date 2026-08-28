@@ -36,6 +36,11 @@ type Config struct {
 	// 左 pane で実行するコマンド (シェルに渡す 1 行)
 	SidebarCmd   string
 	DoorbellFile string
+	// serve (iPhone 向け HTTP/SSE daemon) の待ち受けアドレスと認証トークン。
+	// トークンが空なら serve が ServeTokenFile に保存したもの (無ければ生成して保存) を使う
+	ServeAddr      string
+	ServeToken     string
+	ServeTokenFile string
 	// 通知とは別に「特定のプロセスが動いている pane」を並べるセクション。
 	// 組み込みの Claude / Codex の後ろに設定ファイルの section 行が続く
 	Sections []sectionRule
@@ -75,11 +80,14 @@ func loadConfig() Config {
 		ToggleKey:    envOr("SUZU_INNER_TOGGLE_KEY", "b"),
 		SidebarWidth: intEnvOr("SUZU_SIDEBAR_WIDTH", defaultWidth),
 		DoorbellFile: doorbellFile(),
+		ServeAddr:    envOr("SUZU_SERVE_ADDR", defaultServeAddr),
+		ServeToken:   os.Getenv("SUZU_SERVE_TOKEN"),
 		ConfigFile:   configFile(),
 		// defaultSidebarCmd は exportedEnv() 経由で ScrapeInterval を焼き込むため、
 		// SidebarCmd を組み立てる前に確定させる
 		ScrapeInterval: time.Duration(intEnvOrZero("SUZU_SCRAPE_INTERVAL", int(defaultScrapeInterval/time.Second))) * time.Second,
 	}
+	cfg.ServeTokenFile = filepath.Join(filepath.Dir(cfg.DoorbellFile), tokenFileName)
 	cfg.SidebarCmd = envOr("SUZU_SIDEBAR_CMD", cfg.defaultSidebarCmd())
 	cfg.Sections = append(append([]sectionRule{}, builtinSections...), loadSectionRules(cfg.ConfigFile)...)
 	return cfg

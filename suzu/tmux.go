@@ -11,24 +11,26 @@ import (
 
 // サイドバーの 1 行分の pane。通知 (@claude-waiting が set された window。pane と window の
 // 両方に set されるため window 単位に畳んだ後の姿) と、セクション (sections.go) の
-// プロセス一致 pane の両方をこの型で運ぶ
+// プロセス一致 pane の両方をこの型で運ぶ。
+// JSON タグは serve がブラウザへそのまま配るためのもの (serve が配るのは通知だけなので
+// セクション由来のフィールドは omitempty で落ちる)
 type Notification struct {
 	// 属するセクションの名前。通知は空
-	Section string
-	Session string
+	Section string `json:"section,omitempty"`
+	Session string `json:"session"`
 	// switch-client の target に使う。tmux は `%` `$` `@` で始まる target を
 	// pane/session/window の ID として解釈するため、その形の session 名は
 	// 名前では引けない。表示は Session (名前)、指定は SessionID と分ける
-	SessionID   string
-	WindowID    string
-	WindowIndex string
-	WindowName  string
-	PaneID      string
-	Icon        string
+	SessionID   string `json:"session_id"`
+	WindowID    string `json:"window_id"`
+	WindowIndex string `json:"window_index"`
+	WindowName  string `json:"window_name"`
+	PaneID      string `json:"pane_id"`
+	Icon        string `json:"icon"`
 	// セクションの一意識別 (生成元 rule の Process)。同名タイトルのセクション
 	// (組み込み Claude と設定の section = Claude:my-wrapper 等) を区別するため key() に含める。
 	// 通知は空
-	SectionKey string
+	SectionKey string `json:"section_key,omitempty"`
 }
 
 // 再取得の前後で同じ行を探し直すための識別子。同じ pane が通知と複数のセクションに
@@ -278,6 +280,22 @@ func jump(cfg Config, n Notification) error {
 	if err != nil {
 		return err
 	}
+	return jumpClient(cfg, n, pane.TTY)
+}
+
+// serve (iPhone) からのジャンプ。外側 tmux が無い (daemon 単体で使っている) 時は
+// 右 pane の tty で client を選べないため、内側の実 client の先頭を切り替える
+func jumpAnyClient(cfg Config, n Notification) error {
+	tty := ""
+	if pane, err := fetchInnerPane(cfg); err == nil {
+		tty = pane.TTY
+	}
+	return jumpClient(cfg, n, tty)
+}
+
+// 通知の window を current にし、paneTTY に一致する実 client (無ければ先頭の実 client) を
+// その session へ切り替える
+func jumpClient(cfg Config, n Notification, paneTTY string) error {
 	if err := runTmux(cfg.innerCommand("select-window", "-t", n.WindowID)); err != nil {
 		return fmt.Errorf("select-window に失敗: %w", err)
 	}
@@ -293,12 +311,21 @@ func jump(cfg Config, n Notification) error {
 	if err != nil {
 		return fmt.Errorf("list-clients に失敗: %w", err)
 	}
-	client := parseRealClient(out, pane.TTY)
+	client := parseRealClient(out, paneTTY)
 	if client == "" {
 		return fmt.Errorf("内側 tmux の実 client が見つかりません")
 	}
 	if err := runTmux(cfg.innerCommand("switch-client", "-c", client, "-t", n.SessionID)); err != nil {
 		return fmt.Errorf("switch-client に失敗: %w", err)
+	}
+	return nil
+}
+
+// 通知元 pane へキーを 1 つ送る (serve のボタン)。key は serve 側のホワイトリストを通った
+// tmux のキー名 (Enter / Escape / y 等) だけが来る前提で、ここでは検査しない
+func sendKey(cfg Config, paneID string, key string) error {
+	if err := runTmux(cfg.innerCommand("send-keys", "-t", paneID, key)); err != nil {
+		return fmt.Errorf("send-keys に失敗: %w", err)
 	}
 	return nil
 }

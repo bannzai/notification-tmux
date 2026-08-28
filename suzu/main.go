@@ -30,6 +30,10 @@
 //	                       (default: ${XDG_STATE_HOME:-$HOME/.local/state}/suzu/doorbell)
 //	SUZU_SCRAPE_INTERVAL   pane 内のプロセスと画面内容を見直す間隔 (秒。default: 5、0 で止める)
 //	SUZU_CONFIG_FILE       設定ファイル (default: ${XDG_CONFIG_HOME:-$HOME/.config}/suzu/config)
+//	SUZU_SERVE_ADDR        serve の待ち受けアドレス (default: 127.0.0.1:7788)。
+//	                       iPhone から届かせるには Tailscale の IP を指定する (serve.go)
+//	SUZU_SERVE_TOKEN       serve の認証トークン (default: doorbell と同じディレクトリの serve-token に
+//	                       保存したものを使い、無ければ生成して保存する。URL と一緒に表示)
 //
 // サイドバーは通知 (@claude-waiting) の下に、特定のプロセスが動いている pane を並べる
 // セクションを持つ。Claude / Codex のセクションは組み込みで、pane の画面から
@@ -45,7 +49,7 @@ import (
 	"os"
 )
 
-const usage = `usage: suzu {start|stop|toggle|focus|status|sidebar}
+const usage = `usage: suzu {start|stop|toggle|focus|status|sidebar|serve}
 
   start    外側 tmux を構築して attach する (構築済みなら attach のみ = 冪等)。
            内側 tmux にジャンプキー・トグルキーと doorbell hook を注入する
@@ -56,6 +60,8 @@ const usage = `usage: suzu {start|stop|toggle|focus|status|sidebar}
   focus    {sidebar|inner|toggle} フォーカスを移す
   status   外側の状態を表示する
   sidebar  通知サイドバーの TUI (外側の左 pane が実行する内部サブコマンド)
+  serve    通知一覧を HTTP/SSE で配信し、iPhone のブラウザからボタンで
+           tmux コマンド (ジャンプ・定型キー送信) を発行できる daemon を起動する
 `
 
 func main() {
@@ -88,6 +94,8 @@ func run(cfg Config, args []string) error {
 		return cmdStatus(cfg)
 	case "sidebar":
 		return runSidebar(cfg)
+	case "serve":
+		return cmdServe(cfg)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(64)
