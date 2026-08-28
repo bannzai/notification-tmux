@@ -561,6 +561,80 @@ inner_pane_shows '[test' \
 wait_for "[ \"\$(tmux -L $OUT display-message -p -t \"\$(sidebar_pane)\" '#{pane_width}')\" = 40 ]" \
   && pass "再作成後もサイドバー幅が 40 に戻る" || fail "再作成後のサイドバー幅が戻らない"
 
+echo "=== 6d. serve: 通知を HTTP/SSE で配信し、ボタン相当の POST で tmux コマンドを流す ==="
+# iPhone の代役は curl。認証 (トークン)・ホワイトリスト・push 配信・ジャンプ・キー送信を通す
+SERVE_LOG="$TMP_DIR/serve-$$.log"
+SERVE_BODY="$TMP_DIR/serve-body-$$"
+SERVE_SSE="$TMP_DIR/serve-sse-$$"
+SERVE_COOKIE="$TMP_DIR/serve-cookie-$$"
+SERVE_TOKEN="verify-token-$$"
+SUZU_SERVE_ADDR=127.0.0.1:0 SUZU_SERVE_TOKEN="$SERVE_TOKEN" suzu serve >"$SERVE_LOG" 2>&1 &
+SERVE_PID=$!
+wait_for "grep -q 'http://' $SERVE_LOG" \
+  && pass "serve が待ち受け URL を表示する" || fail "serve が URL を表示しない ($(cat "$SERVE_LOG"))"
+SERVE_URL=$(sed -n 's#.*\(http://[^/]*\)/.*#\1#p' "$SERVE_LOG" | head -1)
+# 認証付きで叩き、HTTP status を返す (body は SERVE_BODY へ)
+api() { curl -s -o "$SERVE_BODY" -w '%{http_code}' -H "Authorization: Bearer $SERVE_TOKEN" "$@"; }
+api_shows() { api "$SERVE_URL/api/notifications" >/dev/null; grep -qF -- "$1" "$SERVE_BODY"; }
+
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$SERVE_URL/api/notifications")" = 401 ] \
+  && pass "トークン無しの API は 401" || fail "トークン無しの API が通る"
+[ "$(curl -s -o /dev/null -w '%{http_code}' "$SERVE_URL/")" = 401 ] \
+  && pass "cookie 無しの画面は 401" || fail "cookie 無しで画面が出る"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -c "$SERVE_COOKIE" "$SERVE_URL/?token=$SERVE_TOKEN")" = 302 ] \
+  && pass "/?token= はトークンを cookie へ移してリダイレクトする" || fail "/?token= がリダイレクトしない"
+grep -q "suzu_token" "$SERVE_COOKIE" && pass "cookie にトークンが入る" || fail "cookie にトークンが入らない"
+curl -s -b "$SERVE_COOKIE" "$SERVE_URL/" | grep -q '<title>suzu</title>' \
+  && pass "cookie で画面 (index.html) が出る" || fail "cookie で画面が出ない"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -b "$SERVE_COOKIE" -X POST -H 'Content-Type: application/json' \
+    -d '{"action":"jump","pane_id":"%0"}' "$SERVE_URL/api/actions")" = 401 ] \
+  && pass "cookie だけの POST は 401 (Authorization ヘッダ必須)" || fail "cookie だけで POST が通る"
+
+# SSE を張ってから通知を出し、push で届くことを見る
+curl -s -N -b "$SERVE_COOKIE" "$SERVE_URL/api/events" >"$SERVE_SSE" 2>&1 &
+SSE_PID=$!
+wait_for "grep -q '^event: notifications' $SERVE_SSE" \
+  && pass "SSE 接続直後にスナップショットが届く" || fail "SSE の初回スナップショットが届かない"
+TEST2_PANE=$(tmux -L "$IN" display-message -p -t test2:0.0 '#{pane_id}')
+tmux -L "$IN" set-option -t test2:0.0 -p @claude-waiting '🔔13:00' || fail "serve 検証用の @claude-waiting の set"
+wait_for "grep -q 'claude-work' $SERVE_SSE" \
+  && pass "通知の発生が SSE で push される" || fail "通知が SSE で届かない"
+wait_for "api_shows claude-work" \
+  && pass "GET /api/notifications に通知が載る" || fail "GET /api/notifications に通知が載らない"
+grep -q 'PREVIEW_TEST2_MARKER' "$SERVE_BODY" \
+  && pass "通知に pane のプレビューが添えられる" || fail "プレビューが無い ($(cat "$SERVE_BODY"))"
+grep -q '"connected":true' "$SERVE_BODY" \
+  && pass "内側 tmux への接続状態が connected" || fail "connected が true でない"
+
+post_action() { api -X POST -H 'Content-Type: application/json' -d "$1" "$SERVE_URL/api/actions"; }
+[ "$(post_action '{"action":"send-keys","pane_id":"'"$TEST2_PANE"'","key":"rm -rf /"}')" = 400 ] \
+  && pass "ホワイトリスト外のキーは 400" || fail "ホワイトリスト外のキーが通る ($(cat "$SERVE_BODY"))"
+[ "$(post_action '{"action":"send-keys","pane_id":"%9999","key":"Enter"}')" = 404 ] \
+  && pass "通知に無い pane への送信は 404" || fail "通知に無い pane へ送れてしまう ($(cat "$SERVE_BODY"))"
+
+# pane に実行前のコマンド行だけを置き、ボタン相当の Enter で実行される。
+# 出力 (SERVE_KEY_MARKER) は Enter が届いた時にだけ現れる (入力行は %s のまま)
+tmux -L "$IN" send-keys -l -t "$TEST2_PANE" "printf 'SERVE_KEY_%s\\n' MARKER"
+[ "$(post_action '{"action":"send-keys","pane_id":"'"$TEST2_PANE"'","key":"Enter"}')" = 200 ] \
+  && pass "Enter の送信が 200" || fail "Enter の送信に失敗 ($(cat "$SERVE_BODY"))"
+wait_for "tmux -L $IN capture-pane -p -t $TEST2_PANE 2>/dev/null | grep -q '^SERVE_KEY_MARKER'" \
+  && pass "送った Enter で通知元 pane のコマンドが実行される" || fail "Enter が pane に届かない"
+
+[ "$(post_action '{"action":"jump","pane_id":"'"$TEST2_PANE"'"}')" = 200 ] \
+  && pass "ジャンプの POST が 200" || fail "ジャンプの POST に失敗 ($(cat "$SERVE_BODY"))"
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test2 ]" \
+  && pass "ジャンプで右 pane の client が test2 へ切り替わる" || fail "ジャンプで client が切り替わらない"
+[ "$(client_session_of_tty "$EXTRA_TTY")" = test1 ] \
+  && pass "serve のジャンプも右 pane 以外の client は切り替えない" || fail "serve のジャンプが別 client を切り替えた"
+
+tmux -L "$IN" set-option -t test2:0.0 -pu @claude-waiting || fail "serve 検証用の @claude-waiting の解除"
+wait_for "grep -q '\"items\":\[\]' $SERVE_SSE" \
+  && pass "通知の解除も SSE で push される" || fail "解除が SSE で届かない"
+kill "$SSE_PID" "$SERVE_PID" 2>/dev/null
+wait "$SSE_PID" "$SERVE_PID" 2>/dev/null
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+sidebar_shows '通知なし' || fail "6d の後片付け"
+
 echo "=== 7. stop は自分が入れたものだけを片付ける ==="
 tmux -L "$T" kill-server 2>/dev/null
 # ユーザー自身の bind と after-set-option hook。stop がこれらを巻き込まないこと
