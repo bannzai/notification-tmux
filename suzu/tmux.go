@@ -159,7 +159,8 @@ func fetchNotifications(cfg Config) notificationsMsg {
 
 // セクション (プロセス別の pane 一覧) を取り直す
 func fetchSectionsMsg(cfg Config) sectionsMsg {
-	return sectionsMsg{sections: fetchSections(cfg)}
+	sections, err := fetchSections(cfg)
+	return sectionsMsg{sections: sections, err: err}
 }
 
 // pane ローカルに set された @claude-waiting。window から継承しただけの pane では空になる。
@@ -270,8 +271,8 @@ func fetchInnerPane(cfg Config) (innerPane, error) {
 
 // 通知・セクションの pane を内側で表示する。フォーカスはサイドバーに残し、右 pane へ移るのは
 // prefix + jump key / q / Esc の明示操作だけにする。
-// select-window だけでなく select-pane も行う: セクションで検出した Claude/Codex が
-// window の非アクティブ pane にいる場合、window を開くだけではその pane に届かない
+// 通知行は window を開く (select-window)。セクション行は加えて select-pane も行う:
+// 検出した Claude/Codex が window の非アクティブ pane にいても、その pane へ到達させる
 func jump(cfg Config, n Notification) error {
 	pane, err := fetchInnerPane(cfg)
 	if err != nil {
@@ -280,8 +281,13 @@ func jump(cfg Config, n Notification) error {
 	if err := runTmux(cfg.innerCommand("select-window", "-t", n.WindowID)); err != nil {
 		return fmt.Errorf("select-window に失敗: %w", err)
 	}
-	if err := runTmux(cfg.innerCommand("select-pane", "-t", n.PaneID)); err != nil {
-		return fmt.Errorf("select-pane に失敗: %w", err)
+	// select-pane はセクション行 (特定 pane を狙う) だけに限定する。通知行の PaneID は、
+	// 複数 pane の window で通知元を確定できなかった時に先頭候補を便宜的に持つ場合があり、
+	// それを強制選択すると window 本来のアクティブ pane ではなく無関係な pane を表示してしまう
+	if n.Section != "" {
+		if err := runTmux(cfg.innerCommand("select-pane", "-t", n.PaneID)); err != nil {
+			return fmt.Errorf("select-pane に失敗: %w", err)
+		}
 	}
 	out, err := output(cfg.innerCommand("list-clients", "-F", clientFormat))
 	if err != nil {

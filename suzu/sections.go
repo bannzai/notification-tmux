@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os/exec"
 	"path/filepath"
 	"regexp"
@@ -58,22 +59,24 @@ var claudeSpinnerLine = regexp.MustCompile(`^\s*[·✢✳✶✻✽*]\s+\S+…\s+
 // "interrupted" (中断済みの案内) にも一致させない
 var interruptHintLine = regexp.MustCompile(`(?i)\([^()]*\bto interrupt\b`)
 
-func fetchSections(cfg Config) []paneSection {
+// セクションを取得する。セクション未定義なら (nil, nil)。list-panes / ps の取得失敗は
+// error で返す: 失敗を「一致なし」の nil と同じ扱いにすると、表示中の全セクションが黙って
+// 消え、原因も出ないまま Claude/Codex が空になり続けるため (呼び出し側が直前を保持する)
+func fetchSections(cfg Config) ([]paneSection, error) {
 	if len(cfg.Sections) == 0 {
-		return nil
+		return nil, nil
 	}
 	out, err := output(cfg.innerCommand("list-panes", "-a", "-F", paneFormat))
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("pane 一覧の取得に失敗: %w", err)
 	}
-	panes := parsePanes(out)
 	psOut, err := listProcesses()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("プロセス一覧 (ps) の取得に失敗: %w", err)
 	}
-	sections := matchSections(cfg.Sections, panes, parseProcesses(psOut))
+	sections := matchSections(cfg.Sections, parsePanes(out), parseProcesses(psOut))
 	applyAgentStates(cfg, sections)
-	return sections
+	return sections, nil
 }
 
 func parsePanes(out string) []pane {

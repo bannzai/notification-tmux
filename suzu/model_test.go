@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -575,5 +576,40 @@ func TestSectionKeyDistinguishesSameTitleRows(t *testing.T) {
 	notif := Notification{Section: "", SectionKey: "", PaneID: "%1"}
 	if notif.key() == builtin.key() {
 		t.Errorf("通知とセクション行の key が衝突している: %q", notif.key())
+	}
+}
+
+func TestSectionsMsgErrorKeepsPreviousSectionsAndShowsDiagnosis(t *testing.T) {
+	m := sectionedModel()
+	before := len(m.sections)
+	if before == 0 {
+		t.Fatal("前提が崩れている (セクションが無い)")
+	}
+
+	// ps 失敗などの取得エラーでは、表示中のセクションを消さず原因だけ差し替える
+	psErr := fmt.Errorf("プロセス一覧 (ps) の取得に失敗: no such file")
+	updated, _ := m.Update(sectionsMsg{sections: nil, err: psErr})
+	got := updated.(model)
+	if len(got.sections) != before {
+		t.Errorf("取得失敗で表示中のセクションが消えた: %d -> %d", before, len(got.sections))
+	}
+	if got.sectionErr == nil {
+		t.Error("取得失敗の原因が表示用に保持されていない")
+	}
+	if !strings.Contains(got.View(), "ps) の取得に失敗") {
+		t.Errorf("取得失敗の原因が描画されていない:\n%s", got.View())
+	}
+
+	// 復旧すると原因が消え、新しいセクションで更新される
+	fresh := []paneSection{{Title: "Codex", Agent: true, Items: []Notification{
+		{Section: "Codex", SectionKey: "codex", Session: "s", WindowID: "@9", WindowIndex: "0", WindowName: "w", PaneID: "%9", Icon: iconAgentIdle},
+	}}}
+	recovered, _ := got.Update(sectionsMsg{sections: fresh, err: nil})
+	rec := recovered.(model)
+	if rec.sectionErr != nil {
+		t.Error("復旧後も取得失敗の原因が残っている")
+	}
+	if len(rec.sections) != 1 || rec.sections[0].Title != "Codex" {
+		t.Errorf("復旧後に新しいセクションへ更新されていない: %+v", rec.sections)
 	}
 }

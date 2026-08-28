@@ -29,6 +29,7 @@ type notificationsMsg struct {
 // @claude-waiting の更新 (list-panes だけで速い) まで巻き添えで遅れるため (watcher.go 参照)
 type sectionsMsg struct {
 	sections []paneSection
+	err      error
 }
 
 type connectionMsg struct{ connected bool }
@@ -49,8 +50,10 @@ type model struct {
 	items []Notification
 	// 通知の下に並ぶプロセス別のセクション (Claude / Codex / 設定ファイルの section)
 	sections []paneSection
-	cursor   int
-	query    string
+	// セクション取得 (list-panes / ps) の失敗。表示中のセクションは保持したまま原因を出す
+	sectionErr error
+	cursor     int
+	query      string
 	// フィルタ入力モード。printable キーを query へ取り込む
 	filtering bool
 	preview   []string
@@ -95,11 +98,21 @@ func (m model) step(msg tea.Msg) (model, tea.Cmd) {
 		m.err = msg.err
 		return m.restoreCursor(key), m.previewCmd()
 	case sectionsMsg:
-		if m.sameSections(msg.sections) {
+		// 取得に失敗した時は表示中のセクションを消さず保持し、原因だけ差し替える。
+		// 失敗で全セクションが黙って消えるのを防ぐ
+		if msg.err != nil {
+			if sameErr(m.sectionErr, msg.err) {
+				return m, m.previewCmd()
+			}
+			m.sectionErr = msg.err
+			return m, m.previewCmd()
+		}
+		if m.sectionErr == nil && m.sameSections(msg.sections) {
 			return m, m.previewCmd()
 		}
 		key := m.selectedKey()
 		m.sections = msg.sections
+		m.sectionErr = nil
 		return m.restoreCursor(key), m.previewCmd()
 	case previewMsg:
 		if msg.paneID == m.selectedPaneID() {
@@ -427,6 +440,9 @@ func (m model) View() string {
 	}
 	if m.err != nil {
 		writeLine(&b, m.err.Error(), width, "")
+	}
+	if m.sectionErr != nil {
+		writeLine(&b, m.sectionErr.Error(), width, "")
 	}
 	// 末尾の改行を残すと bubbletea が空行 1 行として数え、pane が埋まっている時に
 	// 先頭のヘッダーが押し出される

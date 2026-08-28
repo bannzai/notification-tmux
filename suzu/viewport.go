@@ -81,6 +81,9 @@ func (m model) layout() (listBudget int, previewBudget int) {
 	if m.err != nil {
 		fixed++
 	}
+	if m.sectionErr != nil {
+		fixed++
+	}
 	if len(m.preview) > 0 {
 		fixed++ // プレビューの区切り線
 	}
