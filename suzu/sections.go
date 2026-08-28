@@ -244,8 +244,11 @@ func parseCaptures(out string) map[string][]string {
 	captures := map[string][]string{}
 	current := ""
 	for _, line := range strings.Split(out, "\n") {
-		if strings.HasPrefix(line, fieldSeparator) {
-			current = strings.TrimPrefix(line, fieldSeparator)
+		// display-message も tmux 3.4 では区切りの制御文字を 8 進表記 (\037) で出すため、
+		// splitFields と同じく可視化表記を実体へ戻してから marker 行を見分ける
+		normalized := strings.ReplaceAll(line, escapedFieldSeparator, fieldSeparator)
+		if marker, found := strings.CutPrefix(normalized, fieldSeparator); found {
+			current = marker
 			captures[current] = nil
 			continue
 		}

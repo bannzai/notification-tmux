@@ -137,6 +137,12 @@ func TestParseCapturesSplitsByPaneMarker(t *testing.T) {
 	if len(partial) != 1 || len(partial["%1"]) == 0 {
 		t.Errorf("途中で止まった出力を捨てた: %+v", partial)
 	}
+
+	// tmux 3.4 は marker の区切りを 8 進表記 (\037) で出す
+	escaped := parseCaptures(escapedFieldSeparator + "%5\nline a\nline b\n")
+	if got := strings.Join(escaped["%5"], "|"); got != "line a|line b|" {
+		t.Errorf("可視化表記の marker を認識できない: %q", got)
+	}
 }
 
 func TestAgentIconDetectsClaudeSpinner(t *testing.T) {
