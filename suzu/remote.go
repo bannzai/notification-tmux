@@ -39,18 +39,43 @@ func defaultConfigFile() string {
 	return filepath.Join(home, "noroshi", "config")
 }
 
-// ssh の既定オプション (GUI 版 TmuxClient.sshBatchOptions と同じ意図):
+// ssh の既定オプション (GUI 版 TmuxClient.sshBatchOptions / RemoteStopForwarder と同じ意図):
 //   - BatchMode: 鍵認証前提。パスワードプロンプトで再取得や attach を止めない
 //   - ConnectTimeout=5: 落ちている host への接続で再取得を長時間塞がない
 //   - ControlMaster/ControlPath/ControlPersist=600: 接続を多重化し 2 回目以降を数十 ms にする
+//   - ServerAliveInterval=15 / CountMax=4: Wi-Fi の切替やスリープ復帰で TCP が FIN/RST なしに
+//     失われても、長寿命の control mode client を約 1 分で切って再接続ループへ戻す
+//     (OpenSSH の既定 ServerAliveInterval=0 では stdout 待ちのまま残り、通知の更新が止まる)
 func defaultSSHCmd() []string {
 	return []string{"ssh",
 		"-o", "BatchMode=yes",
 		"-o", "ConnectTimeout=5",
 		"-o", "ControlMaster=auto",
-		"-o", "ControlPath=" + filepath.Join(os.TempDir(), "suzu-ssh-%C"),
+		"-o", "ControlPath=" + filepath.Join(sshControlDir(), "ssh-%C"),
 		"-o", "ControlPersist=600",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=4",
 	}
+}
+
+// ControlPath の socket を置くユーザー専用 (mode 700) のディレクトリ。共有の /tmp に予測可能な
+// 名前で置くと、他のローカルユーザーが先に作った socket で接続妨害・多重化接続の乗っ取りが
+// できるため (ssh_config(5) も他ユーザーが書き込めないディレクトリを求める)。
+// Linux では XDG_RUNTIME_DIR (ユーザー専用・700) を使い、無ければ tmux の
+// /tmp/tmux-<uid> と同じ規則で uid 付きのディレクトリを作る (macOS の TMPDIR も
+// ユーザー専用だが、規則を OS で分けずに同じ形にする)。作成は冪等
+func sshControlDir() string {
+	dir := os.Getenv("XDG_RUNTIME_DIR")
+	if dir == "" {
+		dir = filepath.Join(os.TempDir(), fmt.Sprintf("suzu-%d", os.Getuid()))
+	} else {
+		dir = filepath.Join(dir, "suzu")
+	}
+	// MkdirAll は umask の影響を受け、既存ディレクトリの mode も変えないため、明示的に 700 へ揃える
+	if err := os.MkdirAll(dir, 0o700); err == nil {
+		os.Chmod(dir, 0o700)
+	}
+	return dir
 }
 
 // config ファイルの remote-host を記述順で返す。重複は先勝ちで畳む (同じ host へ二重に

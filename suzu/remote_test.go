@@ -2,9 +2,12 @@ package main
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestParseRemoteHostsKeepsOrderAndDedupes(t *testing.T) {
@@ -135,6 +138,40 @@ func TestIsNoServer(t *testing.T) {
 	}
 	if isNoServer(errors.New("exit status 127 (sh: tmux: command not found)")) {
 		t.Error("無関係なエラーを no server と判定している")
+	}
+}
+
+func TestEnterIsIgnoredWhileJumping(t *testing.T) {
+	m := testModel()
+	m.items = sample()
+	m, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if cmd == nil || !m.jumping {
+		t.Fatal("Enter でジャンプが始まらない")
+	}
+	if _, cmd := pressKeys(m, tea.KeyMsg{Type: tea.KeyEnter}); cmd != nil {
+		t.Error("ジャンプ中の Enter で 2 つ目のジャンプが走った")
+	}
+	updated, _ := m.Update(jumpDoneMsg{})
+	if _, cmd := pressKeys(updated.(model), tea.KeyMsg{Type: tea.KeyEnter}); cmd == nil {
+		t.Error("ジャンプ完了後の Enter でジャンプが始まらない")
+	}
+}
+
+func TestSSHControlDirIsPrivate(t *testing.T) {
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("TMPDIR", t.TempDir())
+	dir := sshControlDir()
+	info, err := os.Stat(dir)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("ControlPath 用ディレクトリがユーザー専用 (700) で作られていない: %v mode=%v", err, info.Mode())
+	}
+	if !strings.Contains(strings.Join(defaultSSHCmd(), " "), "ServerAliveInterval=15") {
+		t.Error("監視用 ssh に keepalive が付いていない")
+	}
+	runtimeDir := t.TempDir()
+	t.Setenv("XDG_RUNTIME_DIR", runtimeDir)
+	if got := sshControlDir(); !strings.HasPrefix(got, runtimeDir) {
+		t.Errorf("XDG_RUNTIME_DIR がある環境でそこを使っていない: %s", got)
 	}
 }
 

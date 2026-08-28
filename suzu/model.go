@@ -36,6 +36,9 @@ type connectionMsg struct {
 
 type actionMsg struct{ err error }
 
+// ジャンプの完了。処理中は次の Enter を受け付けないため、actionMsg と分けて解除の合図にする
+type jumpDoneMsg struct{ err error }
+
 // 選択中の通知が出ている pane の見た目。取得中に選択が動いた結果を捨てられるよう
 // どの pane のものか (Notification.paneKey) を一緒に運ぶ
 type previewMsg struct {
@@ -68,6 +71,9 @@ type model struct {
 	connected bool
 	// prefix を受けた直後。次の 1 キーが jump key なら内側へ戻り、toggle key なら閉じる
 	awaitingPrefixKey bool
+	// ジャンプの tea.Cmd が実行中。bubbletea は Cmd を並行して走らせるため、Enter の連打で
+	// リモートの attach 用 window の「無ければ作る」が重なって二重に作られないよう直列化する
+	jumping bool
 	// リスト表示域の先頭に来る行 (session 見出しを含む) の番号
 	offset int
 	err    error
@@ -124,6 +130,9 @@ func (m model) step(msg tea.Msg) (model, tea.Cmd) {
 			})
 		}
 	case actionMsg:
+		m.err = msg.err
+	case jumpDoneMsg:
+		m.jumping = false
 		m.err = msg.err
 	case tea.KeyMsg:
 		return m.updateKey(msg)
@@ -269,7 +278,8 @@ func (m model) updateKey(msg tea.KeyMsg) (model, tea.Cmd) {
 	case "down", "j":
 		return m.moveCursor(1)
 	case "enter":
-		if visible := m.visible(); m.cursor < len(visible) {
+		if visible := m.visible(); m.cursor < len(visible) && !m.jumping {
+			m.jumping = true
 			return m, m.jumpCmd(visible[m.cursor])
 		}
 	}
@@ -346,7 +356,7 @@ func (m model) focusInnerCmd() tea.Cmd {
 
 func (m model) jumpCmd(n Notification) tea.Cmd {
 	cfg := m.cfg
-	return func() tea.Msg { return actionMsg{err: jump(cfg, n)} }
+	return func() tea.Msg { return jumpDoneMsg{err: jump(cfg, n)} }
 }
 
 func (m model) toggleCmd() tea.Cmd {
