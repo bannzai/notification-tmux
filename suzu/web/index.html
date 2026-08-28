@@ -7,7 +7,8 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="suzu">
 <meta name="theme-color" content="#ff5f00">
-<link rel="manifest" href="/manifest.webmanifest">
+<!-- manifest は認証済みにしか返らない。同一 origin でも use-credentials が無いと cookie 無しで取得され 401 になる -->
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <title>suzu</title>
 <style>
   :root {

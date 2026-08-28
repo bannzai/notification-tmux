@@ -163,7 +163,8 @@ SUZU_SERVE_ADDR=$(tailscale ip -4):7788 suzu serve
 ```
 
 - 到達性は Tailscale 等の閉じた網を前提にし、既定の待ち受けは `127.0.0.1:7788` (公開サーバーは立てない)。iPhone から届かせるには `SUZU_SERVE_ADDR` に Tailscale の IP を指定する
-- 認証はトークン 1 本。`SUZU_SERVE_TOKEN` で固定でき、未指定なら起動ごとに生成して URL に載せて表示する。初回に `/?token=...` を開くと cookie に保存され、以降は `/` だけで開ける。iOS の「ホーム画面に追加」にも対応 (manifest の start_url がトークンを持つため、追加後も認証し直しが要らない)
+- 認証はトークン 1 本。`SUZU_SERVE_TOKEN` で固定でき、未指定なら生成して `${XDG_STATE_HOME:-~/.local/state}/suzu/serve-token` に保存し (0600)、再起動しても同じトークンを使う。起動時に URL に載せて表示する。初回に `/?token=...` を開くと cookie に保存され、以降は `/` だけで開ける。iOS の「ホーム画面に追加」にも対応 (manifest の start_url がトークンを持つため、追加後も認証し直しが要らない。トークンを変えた時はホーム画面のアプリを入れ直す)
+- `suzu start` していなくても動く (`@claude-waiting` の変化を拾う doorbell hook は serve 自身も内側 tmux へ注入する)
 - 送れるキーは固定のホワイトリストだけで、対象も「今の通知一覧に載っている pane」に限る。設計の詳細は `suzu/serve.go` 冒頭のコメントを参照
 
 ## 必要なもの

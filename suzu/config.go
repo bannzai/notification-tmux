@@ -34,9 +34,10 @@ type Config struct {
 	SidebarCmd   string
 	DoorbellFile string
 	// serve (iPhone 向け HTTP/SSE daemon) の待ち受けアドレスと認証トークン。
-	// トークンが空なら serve が起動ごとに生成する
-	ServeAddr  string
-	ServeToken string
+	// トークンが空なら serve が ServeTokenFile に保存したもの (無ければ生成して保存) を使う
+	ServeAddr      string
+	ServeToken     string
+	ServeTokenFile string
 }
 
 func loadConfig() Config {
@@ -55,6 +56,7 @@ func loadConfig() Config {
 		ServeAddr:    envOr("SUZU_SERVE_ADDR", defaultServeAddr),
 		ServeToken:   os.Getenv("SUZU_SERVE_TOKEN"),
 	}
+	cfg.ServeTokenFile = filepath.Join(filepath.Dir(cfg.DoorbellFile), tokenFileName)
 	cfg.SidebarCmd = envOr("SUZU_SIDEBAR_CMD", cfg.defaultSidebarCmd())
 	return cfg
 }

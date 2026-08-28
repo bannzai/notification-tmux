@@ -30,7 +30,8 @@
 //	                       (default: ${XDG_STATE_HOME:-$HOME/.local/state}/suzu/doorbell)
 //	SUZU_SERVE_ADDR        serve の待ち受けアドレス (default: 127.0.0.1:7788)。
 //	                       iPhone から届かせるには Tailscale の IP を指定する (serve.go)
-//	SUZU_SERVE_TOKEN       serve の認証トークン (default: 起動ごとに生成して URL と一緒に表示)
+//	SUZU_SERVE_TOKEN       serve の認証トークン (default: doorbell と同じディレクトリの serve-token に
+//	                       保存したものを使い、無ければ生成して保存する。URL と一緒に表示)
 package main
 
 import (

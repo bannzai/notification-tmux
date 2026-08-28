@@ -567,11 +567,21 @@ SERVE_LOG="$TMP_DIR/serve-$$.log"
 SERVE_BODY="$TMP_DIR/serve-body-$$"
 SERVE_SSE="$TMP_DIR/serve-sse-$$"
 SERVE_COOKIE="$TMP_DIR/serve-cookie-$$"
-SERVE_TOKEN="verify-token-$$"
+# + を含めて、表示する URL でトークンが escape されることも見る
+SERVE_TOKEN="verify+token-$$"
+# start が入れた doorbell hook を外し、serve 単独でも hook を入れて通知の変化が届くことを見る
+for target in $(tmux -L "$IN" show-hooks -g after-set-option 2>/dev/null | grep -F -- "$DOORBELL" | cut -d' ' -f1); do
+  tmux -L "$IN" set-hook -gu "$target"
+done
+[ "$(doorbell_hook_count)" = 0 ] || fail "serve 検証の前提 (doorbell hook を外す)"
 SUZU_SERVE_ADDR=127.0.0.1:0 SUZU_SERVE_TOKEN="$SERVE_TOKEN" suzu serve >"$SERVE_LOG" 2>&1 &
 SERVE_PID=$!
 wait_for "grep -q 'http://' $SERVE_LOG" \
   && pass "serve が待ち受け URL を表示する" || fail "serve が URL を表示しない ($(cat "$SERVE_LOG"))"
+grep -q 'token=verify%2Btoken' "$SERVE_LOG" \
+  && pass "表示する URL のトークンが escape されている" || fail "URL のトークンが escape されていない ($(cat "$SERVE_LOG"))"
+wait_for "[ \"\$(doorbell_hook_count)\" = 1 ]" \
+  && pass "serve 単独でも doorbell hook を注入する" || fail "serve が doorbell hook を注入しない"
 SERVE_URL=$(sed -n 's#.*\(http://[^/]*\)/.*#\1#p' "$SERVE_LOG" | head -1)
 # 認証付きで叩き、HTTP status を返す (body は SERVE_BODY へ)
 api() { curl -s -o "$SERVE_BODY" -w '%{http_code}' -H "Authorization: Bearer $SERVE_TOKEN" "$@"; }
@@ -581,7 +591,7 @@ api_shows() { api "$SERVE_URL/api/notifications" >/dev/null; grep -qF -- "$1" "$
   && pass "トークン無しの API は 401" || fail "トークン無しの API が通る"
 [ "$(curl -s -o /dev/null -w '%{http_code}' "$SERVE_URL/")" = 401 ] \
   && pass "cookie 無しの画面は 401" || fail "cookie 無しで画面が出る"
-[ "$(curl -s -o /dev/null -w '%{http_code}' -c "$SERVE_COOKIE" "$SERVE_URL/?token=$SERVE_TOKEN")" = 302 ] \
+[ "$(curl -s -o /dev/null -w '%{http_code}' -c "$SERVE_COOKIE" "$(grep -o 'http://[^ ]*' "$SERVE_LOG" | head -1)")" = 302 ] \
   && pass "/?token= はトークンを cookie へ移してリダイレクトする" || fail "/?token= がリダイレクトしない"
 grep -q "suzu_token" "$SERVE_COOKIE" && pass "cookie にトークンが入る" || fail "cookie にトークンが入らない"
 curl -s -b "$SERVE_COOKIE" "$SERVE_URL/" | grep -q '<title>suzu</title>' \

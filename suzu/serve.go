@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -38,6 +40,9 @@ import (
 //   - 到達性は Tailscale 等の閉じた網を前提にし、既定の bind は localhost。公開サーバーは立てない
 //
 // 同じ push 基盤 (watcher) をサイドバーと共有するため、serve も定期ポーリングは行わない。
+// @claude-waiting の変化を watcher へ届ける doorbell hook は start が注入するが、serve 単独で
+// 起動した時 (start していない・内側 server が再起動した) にも届くよう、serve 自身も
+// 起動時と control mode の接続のたびに注入する (冪等)。
 
 //go:embed web/index.html
 var webIndex []byte
@@ -52,6 +57,10 @@ const (
 	tokenCookieMaxAge = 365 * 24 * time.Hour
 	// 生成トークンの長さ。128 bit あれば総当たりは現実的でなく、URL に載せても短い
 	tokenBytes = 16
+	// 生成トークンの保存先 (doorbell と同じ state ディレクトリ) のファイル名。
+	// ホーム画面に追加した web app は追加時の start_url (トークン入り) を持ち続けるため、
+	// 起動ごとに変わると再起動後に開けなくなる。SUZU_SERVE_TOKEN が無い時はここで固定する
+	tokenFileName = "serve-token"
 	// SSE の接続維持コメントの間隔。iOS Safari は無通信の接続を切ることがあるため、
 	// 一般的なプロキシ・OS の idle timeout (30〜60 秒) より短く取る
 	sseKeepAlive = 25 * time.Second
@@ -110,6 +119,8 @@ type server struct {
 	preview func(paneID string) []string
 	jump    func(n Notification) error
 	sendKey func(paneID string, key string) error
+	// 内側 tmux へ doorbell hook を注入する (冪等)。接続のたびに呼ぶ
+	installHook func()
 }
 
 // tmux を実際に叩く差し替え点を持った server を作る
@@ -126,6 +137,7 @@ func newServer(cfg Config, token string) *server {
 		sendKey: func(paneID string, key string) error {
 			return sendKey(cfg, paneID, key)
 		},
+		installHook: func() { installDoorbellHook(cfg) },
 	}
 }
 
@@ -134,8 +146,8 @@ func cmdServe(cfg Config) error {
 	token := cfg.ServeToken
 	if token == "" {
 		var err error
-		if token, err = generateToken(); err != nil {
-			return fmt.Errorf("トークンの生成に失敗: %w", err)
+		if token, err = loadOrCreateToken(cfg.ServeTokenFile); err != nil {
+			return fmt.Errorf("トークンの用意に失敗: %w", err)
 		}
 	}
 	listener, err := net.Listen("tcp", cfg.ServeAddr)
@@ -143,11 +155,13 @@ func cmdServe(cfg Config) error {
 		return fmt.Errorf("待ち受けに失敗 (%s): %w", cfg.ServeAddr, err)
 	}
 	s := newServer(cfg, token)
+	// start を経ずに serve だけを起動した時も @claude-waiting の変化が届くようにする
+	s.installHook()
 	// watcher の接続時 trigger を待たずに一覧を出しておく (初回アクセスを空で返さない)
 	s.Send(fetchNotifications(cfg))
 	go newWatcher(cfg, s).run()
 
-	fmt.Printf("suzu serve: http://%s/?token=%s\n", listener.Addr(), token)
+	fmt.Printf("suzu serve: %s\n", tokenURL("http://"+listener.Addr().String(), token))
 	if host, _, splitErr := net.SplitHostPort(listener.Addr().String()); splitErr == nil && isUnspecifiedHost(host) {
 		fmt.Fprintln(os.Stderr, "全インターフェースで待ち受けています。iPhone からは Tailscale の IP (tailscale ip -4) で開いてください")
 	}
@@ -160,13 +174,39 @@ func isUnspecifiedHost(host string) bool {
 	return ip != nil && ip.IsUnspecified()
 }
 
-// 起動ごとの認証トークン (hex)
+// 認証トークン (hex) を新しく作る
 func generateToken() (string, error) {
 	buf := make([]byte, tokenBytes)
 	if _, err := rand.Read(buf); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(buf), nil
+}
+
+// 保存済みのトークンを読み、無ければ生成して保存する (再起動しても同じトークンになる)。
+// 本人しか読めないよう 0600 で置く
+func loadOrCreateToken(path string) (string, error) {
+	if data, err := os.ReadFile(path); err == nil {
+		if token := strings.TrimSpace(string(data)); token != "" {
+			return token, nil
+		}
+	}
+	token, err := generateToken()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, []byte(token+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	return token, nil
+}
+
+// トークン入りの初回アクセス URL。トークンに + & # 等が入っても query として復元できるよう escape する
+func tokenURL(base string, token string) string {
+	return base + "/?token=" + url.QueryEscape(token)
 }
 
 // ルーティング。画面 (/) 以外はすべてトークン必須
@@ -203,6 +243,10 @@ func (s *server) Send(msg tea.Msg) {
 		s.mu.Lock()
 		s.state.Connected = msg.connected
 		s.mu.Unlock()
+		// 内側 server が再起動すると注入した hook も消えるため、繋がるたびに入れ直す
+		if msg.connected {
+			s.installHook()
+		}
 	default:
 		return
 	}
@@ -348,7 +392,7 @@ func (s *server) handleManifest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]any{
 		"name":             "suzu",
 		"short_name":       "suzu",
-		"start_url":        "/?token=" + s.token,
+		"start_url":        tokenURL("", s.token),
 		"display":          "standalone",
 		"background_color": "#111111",
 		"theme_color":      "#ff5f00",

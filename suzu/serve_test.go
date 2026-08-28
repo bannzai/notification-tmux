@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -26,11 +29,73 @@ func testServer(t *testing.T) (*server, *[]string) {
 		calls = append(calls, "send-keys "+paneID+" "+key)
 		return nil
 	}
+	s.installHook = func() { calls = append(calls, "install-hook") }
 	s.Send(notificationsMsg{items: []Notification{
 		{Session: "main", SessionID: "$0", WindowID: "@3", WindowIndex: "0", WindowName: "claude-work", PaneID: "%7", Icon: "🔔09:00"},
 	}})
 	s.Send(connectionMsg{connected: true})
+	// 接続時の hook 注入は action の記録と分けて数える
+	calls = calls[:0]
 	return s, &calls
+}
+
+// 内側 tmux に繋がるたびに doorbell hook を入れ直す (serve 単独起動・内側 server の再起動でも通知が届く)
+func TestServeInstallsDoorbellHookOnConnect(t *testing.T) {
+	installs := 0
+	s := newServer(Config{}, testToken)
+	s.installHook = func() { installs++ }
+	s.Send(connectionMsg{connected: true})
+	s.Send(connectionMsg{connected: false})
+	s.Send(connectionMsg{connected: true})
+	if installs != 2 {
+		t.Errorf("接続 2 回に対して hook 注入が %d 回", installs)
+	}
+}
+
+func TestLoadOrCreateTokenPersists(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "serve-token")
+	first, err := loadOrCreateToken(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := loadOrCreateToken(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == "" || first != second {
+		t.Errorf("再読込で同じトークンにならない: %q %q", first, second)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Errorf("トークンファイルが本人以外にも読める: %v", info.Mode().Perm())
+	}
+}
+
+// + & # のような文字を含むトークンでも、表示する URL と manifest の start_url から復元できる
+func TestTokenURLEscapesToken(t *testing.T) {
+	s := newServer(Config{}, "a+b&c#d")
+	got := tokenURL("http://127.0.0.1:7788", s.token)
+	if got != "http://127.0.0.1:7788/?token=a%2Bb%26c%23d" {
+		t.Errorf("URL の escape が違う: %s", got)
+	}
+	parsed, _ := url.Parse(got)
+	if parsed.Query().Get("token") != s.token {
+		t.Errorf("表示した URL からトークンを復元できない: %q", parsed.Query().Get("token"))
+	}
+	rec := httptest.NewRecorder()
+	s.handler().ServeHTTP(rec, request("GET", got[len("http://127.0.0.1:7788"):], "", nil))
+	if rec.Code != http.StatusFound {
+		t.Errorf("escape 済み URL で初回認証が通らない: %d %s", rec.Code, rec.Body.String())
+	}
+	rec = httptest.NewRecorder()
+	// cookie にはトークンがそのまま入る (Set-Cookie は escape しない)
+	s.handler().ServeHTTP(rec, request("GET", "/manifest.webmanifest", "", map[string]string{"Cookie": tokenCookieName + "=" + s.token}))
+	if !strings.Contains(rec.Body.String(), `"start_url":"/?token=a%2Bb%26c%23d"`) {
+		t.Errorf("manifest の start_url が escape されていない: %s", rec.Body.String())
+	}
 }
 
 func request(method, path string, body string, headers map[string]string) *http.Request {
