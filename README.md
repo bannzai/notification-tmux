@@ -148,6 +148,24 @@ scripts/
 docs/knowledge.md            # v1 開発時の知見まとめ (作り直し用)
 ```
 
+## iPhone から通知ボタンで操作する (suzu serve)
+
+TUI サイドバー (suzu) の通知データ層を daemon (`suzu serve`) として起動すると、iPhone のブラウザで「通知一覧 + 専用ボタン」の画面が開き、ボタンをタップするだけで Mac 側の tmux へコマンドを流せる (issue #72)。SSH で TUI を触る必要はない。
+
+- 通知ごとに pane のプレビュー (末尾 10 行) と、「ジャンプ」(該当 window へ `select-window` + `switch-client`)、定型キー (`Enter` / `Esc` / `y` / `n` / `1` / `2` / `3` を通知元 pane へ `send-keys`) のボタンが並ぶ
+- 一覧の更新は SSE の push (サイドバーと同じ doorbell + control mode 基盤) で、ポーリングしない
+- キー送信は誤タップ対策として 2 回タップ (1 回目で「y を送る?」に変わり、3 秒以内の 2 回目で送信) にしている
+
+```bash
+make cli                                   # suzu を ~/.local/bin へ
+SUZU_SERVE_ADDR=$(tailscale ip -4):7788 suzu serve
+# → suzu serve: http://100.x.y.z:7788/?token=<token>  この URL を iPhone で開く
+```
+
+- 到達性は Tailscale 等の閉じた網を前提にし、既定の待ち受けは `127.0.0.1:7788` (公開サーバーは立てない)。iPhone から届かせるには `SUZU_SERVE_ADDR` に Tailscale の IP を指定する
+- 認証はトークン 1 本。`SUZU_SERVE_TOKEN` で固定でき、未指定なら起動ごとに生成して URL に載せて表示する。初回に `/?token=...` を開くと cookie に保存され、以降は `/` だけで開ける。iOS の「ホーム画面に追加」にも対応 (manifest の start_url がトークンを持つため、追加後も認証し直しが要らない)
+- 送れるキーは固定のホワイトリストだけで、対象も「今の通知一覧に載っている pane」に限る。設計の詳細は `suzu/serve.go` 冒頭のコメントを参照
+
 ## 必要なもの
 
 - macOS 26+ / Xcode 26+（初回ビルドで Metal Toolchain が無い場合は `xcodebuild -downloadComponent MetalToolchain`）
