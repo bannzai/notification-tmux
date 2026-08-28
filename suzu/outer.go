@@ -143,21 +143,48 @@ func installInnerKeys(cfg Config) {
 // キーは env で変更できるため、ユーザー自身の bind とぶつかり得る。
 // 上書きは行うが、黙って奪わないよう知らせる
 func warnKeyOverride(cfg Config, key string) {
-	out, err := output(cfg.innerCommand("list-keys", "-T", "prefix", key))
-	if err != nil || strings.Contains(out, injectedKeyMarker) {
+	binding := prefixKeyBinding(cfg, key)
+	if binding == "" || strings.Contains(binding, injectedKeyMarker) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "内側 tmux の prefix+%s には既存の bind があります。suzu のバインドで上書きします: %s\n",
-		key, strings.TrimSpace(out))
+		key, binding)
 }
 
 // 自分が注入した bind の時だけ解除する
 func unbindInjectedKey(cfg Config, key string) {
-	out, err := output(cfg.innerCommand("list-keys", "-T", "prefix", key))
-	if err != nil || !strings.Contains(out, injectedKeyMarker) {
+	if !strings.Contains(prefixKeyBinding(cfg, key), injectedKeyMarker) {
 		return
 	}
 	cfg.innerCommand("unbind-key", key).Run()
+}
+
+// prefix テーブルで key に束縛されている bind-key 行 (未束縛なら空)。
+// list-keys にキーを渡して 1 件だけ引く形は tmux 3.7 で何も出力しなくなったため、
+// テーブル全体を出して自分で探す
+func prefixKeyBinding(cfg Config, key string) string {
+	out, err := output(cfg.innerCommand("list-keys", "-T", "prefix"))
+	if err != nil {
+		return ""
+	}
+	return findPrefixKeyBinding(out, key)
+}
+
+// list-keys は列を空白で揃えて出す (bind-key    -T prefix N       run-shell ...) ため、
+// 空白区切りの語で「-T prefix <key>」の並びを探す。-r (repeat) は -T の前に付く
+func findPrefixKeyBinding(listKeysOutput string, key string) string {
+	for _, line := range strings.Split(listKeysOutput, "\n") {
+		words := strings.Fields(line)
+		for i := 0; i+2 < len(words); i++ {
+			if words[i] == "-T" {
+				if words[i+1] == "prefix" && words[i+2] == key {
+					return strings.TrimSpace(line)
+				}
+				break
+			}
+		}
+	}
+	return ""
 }
 
 // 内側 tmux の「どこかで set-option された」を doorbell ファイルへ伝える hook を注入する
@@ -274,13 +301,16 @@ func initializeOuter(cfg Config) error {
 // サイドバーが残るため額縁自体は生きている。次の start で右 pane を作り直す。
 // サイドバーが無い時 (toggle で閉じた状態) は触らない
 func restoreInnerPane(cfg Config) error {
-	if _, err := fetchInnerPane(cfg); err == nil {
+	_, missing := fetchInnerPane(cfg)
+	if missing == nil {
 		return nil
 	}
 	sidebar := sidebarPaneID(cfg)
 	if sidebar == "" {
 		return nil
 	}
+	// 壊れた socket の自己修復と同じく、黙って構成を変えずに理由を残す
+	fmt.Fprintf(os.Stderr, "内側 pane が見つからないため作り直します (%v)\n", missing)
 	if err := runTmux(cfg.outerCommand("split-window", "-h", "-d", "-t", outerWindow,
 		"TMUX= "+cfg.InnerAttach)); err != nil {
 		return fmt.Errorf("内側 pane の再作成に失敗: %w", err)

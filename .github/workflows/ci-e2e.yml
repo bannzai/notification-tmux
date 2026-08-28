@@ -1,0 +1,94 @@
+name: CI E2E (suzu)
+
+# suzu/verify.sh は隔離 socket の tmux だけを使う E2E で数分で終わるため、PR ごとに回す。
+# Linux runner で完結し macOS runner の課金を伴わない
+on:
+  pull_request:
+    paths:
+      - "suzu/**"
+      - "Makefile"
+      - ".github/workflows/ci-e2e.yml"
+  push:
+    branches: [main]
+    paths:
+      - "suzu/**"
+      - "Makefile"
+      - ".github/workflows/ci-e2e.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # runner の既定 locale は未設定で tmux が非 UTF-8 扱いになり、verify.sh が使う
+  # 絵文字・日本語の window 名が _ にサニタイズされて照合が崩れる
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  # ユーザー環境 (Homebrew の tmux) と同じ版。tmux の公式配布はソース tarball のみ
+  TMUX_VERSION: 3.6a
+
+jobs:
+  e2e:
+    name: e2e (tmux ${{ matrix.tmux.label }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # 必須なのはユーザー環境と同じ 3.6a。apt の 3.4 (旧版との互換) と Homebrew の最新版
+    # (次に brew upgrade した時に何が壊れるか) は参考 job で、落ちても PR を止めない
+    continue-on-error: ${{ matrix.tmux.reference }}
+    strategy:
+      fail-fast: false
+      matrix:
+        tmux:
+          - { label: "3.6a (source)", install: source, reference: false }
+          - { label: "3.4 (apt)", install: apt, reference: true }
+          - { label: "latest (brew)", install: brew, reference: true }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: suzu/go.mod
+          cache-dependency-path: suzu/go.sum
+      - name: ビルド済み tmux をキャッシュから復元する
+        if: matrix.tmux.install == 'source'
+        id: tmux-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/tmux-${{ env.TMUX_VERSION }}
+          key: tmux-${{ env.TMUX_VERSION }}-utf8proc-${{ runner.os }}-${{ runner.arch }}
+      - name: tmux をインストールする (公式 tarball からビルド)
+        if: matrix.tmux.install == 'source'
+        # 実行時ライブラリはキャッシュの有無に関わらず要るため毎回入れる
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libevent-dev libncurses-dev libutf8proc-dev bison pkg-config
+          if [ "${{ steps.tmux-cache.outputs.cache-hit }}" != "true" ]; then
+            curl -sSL -o /tmp/tmux.tar.gz "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"
+            tar xzf /tmp/tmux.tar.gz -C /tmp
+            cd "/tmp/tmux-${TMUX_VERSION}"
+            ./configure --prefix="$HOME/tmux-${TMUX_VERSION}" --enable-utf8proc
+            make -j"$(nproc)"
+            make install
+          fi
+          echo "$HOME/tmux-${TMUX_VERSION}/bin" >> "$GITHUB_PATH"
+      - name: tmux をインストールする (apt)
+        if: matrix.tmux.install == 'apt'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tmux
+      - name: tmux をインストールする (brew)
+        if: matrix.tmux.install == 'brew'
+        # runner の Homebrew は PATH に入っていないため shellenv で通す
+        run: |
+          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
+          brew install tmux
+          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+      - name: tmux のバージョンを確認する
+        run: |
+          which tmux
+          tmux -V
+      - name: 隔離 socket の E2E (verify.sh) を実行する
+        run: make verify-cli

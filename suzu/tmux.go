@@ -34,6 +34,15 @@ type innerPane struct {
 // テキストに現れない ASCII Unit Separator を使う (Noroshi/Noroshi/TmuxModels.swift と同じ)
 const fieldSeparator = "\x1f"
 
+// tmux 3.4 は list-* の出力で制御文字を 8 進の可視化表記に変えるため、区切りが
+// この 4 文字で届く (CI の apt 版で実測)。3.6a はそのまま届く
+const escapedFieldSeparator = `\037`
+
+// tmux の -F 出力 1 行を区切りで分ける。可視化表記で届いた区切りも同じ区切りとして扱う
+func splitFields(line string) []string {
+	return strings.Split(strings.ReplaceAll(line, escapedFieldSeparator, fieldSeparator), fieldSeparator)
+}
+
 const (
 	// Claude Code の hook が通知元 pane (-p) と その window (-w) に set する option。
 	// window option は同じ window の全 pane へ継承されるため、pane ローカルに
@@ -151,7 +160,7 @@ func parseNotifications(out string, paneOption func(paneID string) string) []Not
 	var windowIDs []string
 	candidates := map[string][]Notification{}
 	for _, line := range strings.Split(out, "\n") {
-		fields := strings.Split(line, fieldSeparator)
+		fields := splitFields(line)
 		if len(fields) != waitingFieldCount || fields[2] == "" {
 			continue
 		}
@@ -200,7 +209,7 @@ func parseRealClient(out string, paneTTY string) string {
 		if line == "" {
 			continue
 		}
-		fields := strings.Split(line, fieldSeparator)
+		fields := splitFields(line)
 		if len(fields) != 3 || fields[0] == "" {
 			continue
 		}
@@ -219,7 +228,7 @@ func parseRealClient(out string, paneTTY string) string {
 }
 
 func parseInnerPane(out string) (innerPane, bool) {
-	fields := strings.Split(strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]), fieldSeparator)
+	fields := splitFields(strings.TrimSpace(strings.SplitN(out, "\n", 2)[0]))
 	if len(fields) != 2 || fields[0] == "" {
 		return innerPane{}, false
 	}
