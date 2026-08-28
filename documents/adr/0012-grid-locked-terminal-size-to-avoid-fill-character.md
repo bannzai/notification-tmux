@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted (GUI 版 Noroshi.app の決定。GUI 版は issue #76 で削除したため、現行の suzu には適用されない。記録として残す)
 
 ## Context
 

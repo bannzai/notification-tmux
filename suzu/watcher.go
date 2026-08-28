@@ -18,34 +18,66 @@ const (
 	controlLineLimit = 1 << 20
 )
 
-// 再取得の結果 (notificationsMsg / connectionMsg) の届け先。サイドバーでは bubbletea の
-// Program、serve では HTTP/SSE の server が受ける
+// 再取得の結果 (notificationsMsg / sectionsMsg / connectionMsg) の届け先。サイドバーでは
+// bubbletea の Program、serve では HTTP/SSE の server が受ける
 type msgSink interface {
 	Send(msg tea.Msg)
 }
 
-// 内側 tmux の変化を push で受け取り、デバウンスして通知一覧の再取得を sink へ送る。
-// 定期ポーリングは行わない
+// 内側 tmux の変化を push で受け取り、デバウンスして通知一覧とセクションの再取得を sink へ送る。
+// tmux の構造と @claude-waiting の変化は push だけで拾う。時間駆動は pane 内のプロセスと
+// 画面内容の見直し (ScrapeInterval) だけで、これは tmux がイベントを出さない変化のため
 type watcher struct {
-	cfg      Config
-	sink     msgSink
+	cfg  Config
+	sink msgSink
+	// 通知の再取得トリガ (速い)。セクションの再取得 (sectionTriggers) と分けるのは、
+	// 遅い ps を伴うセクション取得が通知の反映を巻き添えで遅らせないため
 	triggers chan struct{}
+	// セクションの再取得トリガ (ps を伴い遅い)
+	sectionTriggers chan struct{}
 }
 
 func newWatcher(cfg Config, sink msgSink) *watcher {
-	return &watcher{cfg: cfg, sink: sink, triggers: make(chan struct{}, 1)}
+	return &watcher{
+		cfg:             cfg,
+		sink:            sink,
+		triggers:        make(chan struct{}, 1),
+		sectionTriggers: make(chan struct{}, 1),
+	}
 }
 
 func (w *watcher) run() {
 	go w.watchDoorbell()
 	go w.watchControlMode()
+	if w.cfg.ScrapeInterval > 0 {
+		go w.tickScrape()
+	}
+	// セクションの再取得は専用 goroutine に置き、遅い ps が通知の debounce を止めないようにする
+	go w.debounceSections()
 	w.debounce()
 }
 
-// 取りこぼしてもデバウンス後に必ず 1 回再取得されるため、詰まっている時は捨ててよい
+// プロセスの起動・終了 (pane-title-changed hook が拾えない、タイトルを変えないシェル) と
+// Claude Code / Codex CLI の 実行中 ↔ 入力待ち の切り替わりは tmux のイベントにならないため、
+// 低頻度の再取得だけで追う。1 回の再取得は list-panes・ps・まとめた capture-pane の
+// 3 プロセスで済み、UI の描画は差分だけが更新される
+func (w *watcher) tickScrape() {
+	for {
+		time.Sleep(w.cfg.ScrapeInterval)
+		send(w.sectionTriggers)
+	}
+}
+
+// 取りこぼしてもデバウンス後に必ず 1 回再取得されるため、詰まっている時は捨ててよい。
+// 通知とセクションの両方を促す
 func (w *watcher) trigger() {
+	send(w.triggers)
+	send(w.sectionTriggers)
+}
+
+func send(ch chan struct{}) {
 	select {
-	case w.triggers <- struct{}{}:
+	case ch <- struct{}{}:
 	default:
 	}
 }
@@ -67,6 +99,29 @@ func (w *watcher) debounce() {
 		case <-timer.C:
 			armed = false
 			w.sink.Send(fetchNotifications(w.cfg))
+		}
+	}
+}
+
+// セクションの再取得を独立してデバウンスする。debounce と同じ仕組みだが、
+// 遅い ps を伴う fetchSectionsMsg を通知の debounce goroutine から切り離すためだけに分ける
+func (w *watcher) debounceSections() {
+	timer := time.NewTimer(debounceInterval)
+	if !timer.Stop() {
+		<-timer.C
+	}
+	armed := false
+	for {
+		select {
+		case <-w.sectionTriggers:
+			if armed && !timer.Stop() {
+				<-timer.C
+			}
+			timer.Reset(debounceInterval)
+			armed = true
+		case <-timer.C:
+			armed = false
+			w.sink.Send(fetchSectionsMsg(w.cfg))
 		}
 	}
 }

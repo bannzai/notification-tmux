@@ -9,10 +9,14 @@ import (
 	"strings"
 )
 
-// @claude-waiting が set された window 1 件。pane と window の両方に set されるため
-// window 単位に畳んだ後の姿を表す
-// JSON タグは serve がブラウザへそのまま配るためのもの
+// サイドバーの 1 行分の pane。通知 (@claude-waiting が set された window。pane と window の
+// 両方に set されるため window 単位に畳んだ後の姿) と、セクション (sections.go) の
+// プロセス一致 pane の両方をこの型で運ぶ。
+// JSON タグは serve がブラウザへそのまま配るためのもの (serve が配るのは通知だけなので
+// セクション由来のフィールドは omitempty で落ちる)
 type Notification struct {
+	// 属するセクションの名前。通知は空
+	Section string `json:"section,omitempty"`
 	Session string `json:"session"`
 	// switch-client の target に使う。tmux は `%` `$` `@` で始まる target を
 	// pane/session/window の ID として解釈するため、その形の session 名は
@@ -23,6 +27,16 @@ type Notification struct {
 	WindowName  string `json:"window_name"`
 	PaneID      string `json:"pane_id"`
 	Icon        string `json:"icon"`
+	// セクションの一意識別 (生成元 rule の Process)。同名タイトルのセクション
+	// (組み込み Claude と設定の section = Claude:my-wrapper 等) を区別するため key() に含める。
+	// 通知は空
+	SectionKey string `json:"section_key,omitempty"`
+}
+
+// 再取得の前後で同じ行を探し直すための識別子。同じ pane が通知と複数のセクションに
+// 出ることがあるため、pane だけでなくセクションのタイトルと一意識別も含める
+func (n Notification) key() string {
+	return n.Section + fieldSeparator + n.SectionKey + fieldSeparator + n.PaneID
 }
 
 // 外側 tmux でサイドバーの隣にいる pane。内側 tmux へ attach している右 pane を指す
@@ -32,7 +46,7 @@ type innerPane struct {
 }
 
 // tmux 出力のフィールド区切り。window 名やコマンド行にはタブが入り得るため、
-// テキストに現れない ASCII Unit Separator を使う (Noroshi/Noroshi/TmuxModels.swift と同じ)
+// テキストに現れない ASCII Unit Separator を使う (削除済みの GUI 版 TmuxModels.swift と同じ規則)
 const fieldSeparator = "\x1f"
 
 // tmux 3.4 は list-* の出力で制御文字を 8 進の可視化表記に変えるため、区切りが
@@ -134,6 +148,8 @@ func withDetail(err error, stderr string) error {
 	return fmt.Errorf("%w (%s)", err, strings.ReplaceAll(detail, "\n", " / "))
 }
 
+// 通知一覧 (@claude-waiting) を取り直す。list-panes だけで速いため、遅い ps を伴う
+// セクション取得 (fetchSectionsMsg) とは別メッセージに分ける
 func fetchNotifications(cfg Config) notificationsMsg {
 	out, err := output(cfg.innerCommand("list-panes", "-a", "-f", waitingFilter, "-F", waitingFormat))
 	if err != nil {
@@ -141,6 +157,12 @@ func fetchNotifications(cfg Config) notificationsMsg {
 		return notificationsMsg{err: fmt.Errorf("通知一覧の取得に失敗: %w", err)}
 	}
 	return notificationsMsg{items: parseNotifications(out, cfg.paneWaitingOption)}
+}
+
+// セクション (プロセス別の pane 一覧) を取り直す
+func fetchSectionsMsg(cfg Config) sectionsMsg {
+	sections, err := fetchSections(cfg)
+	return sectionsMsg{sections: sections, err: err}
 }
 
 // pane ローカルに set された @claude-waiting。window から継承しただけの pane では空になる。
@@ -249,8 +271,10 @@ func fetchInnerPane(cfg Config) (innerPane, error) {
 	return pane, nil
 }
 
-// 通知の window を内側で表示する。フォーカスはサイドバーに残し、右 pane へ移るのは
-// prefix + jump key / q / Esc の明示操作だけにする
+// 通知・セクションの pane を内側で表示する。フォーカスはサイドバーに残し、右 pane へ移るのは
+// prefix + jump key / q / Esc の明示操作だけにする。
+// 通知行は window を開く (select-window)。セクション行は加えて select-pane も行う:
+// 検出した Claude/Codex が window の非アクティブ pane にいても、その pane へ到達させる
 func jump(cfg Config, n Notification) error {
 	pane, err := fetchInnerPane(cfg)
 	if err != nil {
@@ -274,6 +298,14 @@ func jumpAnyClient(cfg Config, n Notification) error {
 func jumpClient(cfg Config, n Notification, paneTTY string) error {
 	if err := runTmux(cfg.innerCommand("select-window", "-t", n.WindowID)); err != nil {
 		return fmt.Errorf("select-window に失敗: %w", err)
+	}
+	// select-pane はセクション行 (特定 pane を狙う) だけに限定する。通知行の PaneID は、
+	// 複数 pane の window で通知元を確定できなかった時に先頭候補を便宜的に持つ場合があり、
+	// それを強制選択すると window 本来のアクティブ pane ではなく無関係な pane を表示してしまう
+	if n.Section != "" {
+		if err := runTmux(cfg.innerCommand("select-pane", "-t", n.PaneID)); err != nil {
+			return fmt.Errorf("select-pane に失敗: %w", err)
+		}
 	}
 	out, err := output(cfg.innerCommand("list-clients", "-F", clientFormat))
 	if err != nil {

@@ -2,7 +2,7 @@
 
 ## Status
 
-Superseded by [0005](0005-switch-client-for-session-navigation.md)
+Superseded by [0005](0005-switch-client-for-session-navigation.md) (GUI 版 Noroshi.app の決定。GUI 版は issue #76 で削除したため、現行の suzu には適用されない。記録として残す)
 
 ## Context
 

@@ -154,6 +154,9 @@ func cmdServe(cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("待ち受けに失敗 (%s): %w", cfg.ServeAddr, err)
 	}
+	// serve が配るのは通知だけで、セクション (sectionsMsg) は受けても捨てる。ps を伴う
+	// 時間駆動の再取得 (tickScrape) を回すだけ無駄なので止める (serve はポーリングしない)
+	cfg.ScrapeInterval = 0
 	s := newServer(cfg, token)
 	// start を経ずに serve だけを起動した時も @claude-waiting の変化が届くようにする
 	s.installHook()

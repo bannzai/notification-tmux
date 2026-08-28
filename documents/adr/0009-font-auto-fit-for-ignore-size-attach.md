@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted (GUI 版 Noroshi.app の決定。「他 client の window を resize しないため ignore-size で attach する」は suzu にも引き継がれ、`suzu/watcher.go` の control mode client が `-f ignore-size` で attach する根拠として本 ADR を参照する。フォント自動フィットは GUI 固有で suzu には無い)
 
 ## Context
 

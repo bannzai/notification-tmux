@@ -11,8 +11,8 @@
 #         切り替えることを確かめる
 #
 # 実行: bash suzu/verify.sh
-# 全項目 PASS で exit 0。キー入力の実機経路 (IME・コピーモード・マウス・OSC52) は
-# 対象外で、ユーザーの手動検証に委ねる。
+# 全項目 PASS で exit 0。コピーモード・OSC52・マウスは T への send-keys で再現する (5j / 5k)。
+# IME (変換前文字列の描画) だけは実端末でしか再現できず、ユーザーの手動検証に委ねる。
 set -u
 
 SUZU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,6 +27,11 @@ STALE="szv-stale-$$"
 BROKEN="szv-broken-$$"
 DOORBELL_DIR="$TMP_DIR/phase2-doorbell-$$"
 DOORBELL="$DOORBELL_DIR/doorbell"
+# セクションの設定ファイルと、Claude Code / 常駐スクリプトの代役 (プロセス名で一致させる)
+CONFIG_FILE="$DOORBELL_DIR/config"
+FAKE_BIN="$DOORBELL_DIR/bin"
+# 端末代役 T の pane 出力 (= 外側 client が実端末へ書く生のバイト列) を pipe-pane で溜める先
+OSC52_LOG="$TMP_DIR/phase2-osc52-$$.log"
 FAIL=0
 
 pass() { echo "PASS: $1"; }
@@ -63,6 +68,10 @@ dump_state() {
   tmux -L "$IN" list-panes -a -F '#{pane_id}' 2>/dev/null | while read -r pane; do
     printf '%s local=[%s]\n' "$pane" "$(tmux -L "$IN" show-options -p -q -v -t "$pane" @claude-waiting 2>&1)"
   done
+  # セクションが pane のプロセス木をどう見ているか (suzu/sections.go と同じ問い合わせ)
+  echo "[inner pane processes]"
+  tmux -L "$IN" list-panes -a -F '#{pane_id} pid=#{pane_pid} cmd=#{pane_current_command}' 2>&1
+  ps -e -ww -o pid=,ppid=,args= 2>&1 | grep -F "$FAKE_BIN" | grep -v grep
   echo "--- end state ---"
 }
 
@@ -84,17 +93,22 @@ cleanup() {
     rm -f "$(socket_path "$socket")"
   done
   rm -rf "$DOORBELL_DIR"
+  rm -f "$OSC52_LOG"
 }
 # Ctrl-C や timeout の SIGTERM で中断された時も EXIT trap を通して後片付けする
 trap 'exit 130' INT TERM
 trap cleanup EXIT
 
 # suzu を隔離 socket 向けの環境で実行する
+# SUZU_CONFIG_FILE は、実行者の ~/.config/suzu/config を読まないよう必ず隔離する。
+# SUZU_SCRAPE_INTERVAL=1 は既定の 5 秒より短くして待ち時間を詰めるため
 suzu() {
   SUZU_OUTER_SOCKET="$OUT" \
   SUZU_INNER_TMUX="tmux -L $IN" \
   SUZU_INNER_TMUX_CMD="tmux -L $IN attach -t test1" \
   SUZU_DOORBELL_FILE="$DOORBELL" \
+  SUZU_CONFIG_FILE="$CONFIG_FILE" \
+  SUZU_SCRAPE_INTERVAL=1 \
     "$SUZU_BIN" "$@" </dev/null
 }
 
@@ -103,6 +117,21 @@ wait_for() {
   local i
   for i in $(seq 1 50); do
     eval "$1" && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+# 端末代役 T を height 行で起動し、その pane で command を実行する。
+# kill-server 直後は旧 server が終了処理中で、同じ socket へ繋いだ新しい client が
+# "server exited unexpectedly" で落ちることがある (tmux 3.4 の CI で実測。同じ commit の
+# 前回実行は通っており再現性は無い)。socket の残り方は OS で違う (Linux は server が
+# unlink する・macOS は残る) ため、socket の消失ではなく起動の成否で短く再試行する
+start_terminal_stand_in() {
+  local height="$1" command="$2" i
+  for i in 1 2 3 4 5; do
+    tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y "$height" "$command" 2>/dev/null \
+      && return 0
     sleep 0.2
   done
   return 1
@@ -181,6 +210,28 @@ else
   exit 1
 fi
 
+echo "=== 1b. セクションの設定ファイルと代役プロセスを用意 ==="
+mkdir -p "$FAKE_BIN"
+cat >"$CONFIG_FILE" <<'CONF'
+# 設定ファイルの section 行で汎用セクションを足す (Claude / Codex は組み込み)
+section = Watchers:szv-fake-watcher
+CONF
+# Claude Code の代役。実機の capture-pane と同じ実行中表示を出し、Enter で入力待ち表示へ、
+# もう一度 Enter で終了する。sh スクリプトなので ps では "sh .../claude" と見え、
+# 実行ファイル名ではなく引数の basename で claude と一致する経路を通る
+cat >"$FAKE_BIN/claude" <<'FAKE'
+printf '✶ Swirling… (3s · ↓ 1.0k tokens)\n'
+read -r _
+printf '\033[2J\033[H❯ \n'
+read -r _
+FAKE
+# 常駐スクリプトの代役 (tmux-issue-watcher 相当)
+cat >"$FAKE_BIN/szv-fake-watcher" <<'FAKE'
+read -r _
+FAKE
+[ -f "$CONFIG_FILE" ] && [ -f "$FAKE_BIN/claude" ] && [ -f "$FAKE_BIN/szv-fake-watcher" ] \
+  && pass "設定ファイルと代役スクリプトを配置" || fail "設定ファイルと代役スクリプトの配置"
+
 echo "=== 2. 内側 (代役) server を隔離 socket で起動 (test1 / test2) ==="
 tmux -L "$IN" -f /dev/null new-session -d -s test1 -x 200 -y 50 \
   'echo INNER_READY_MARKER; exec sh' || fail "内側 session test1 の起動"
@@ -221,8 +272,11 @@ inner_pane_shows 'INNER_READY_MARKER' \
   && pass "アクティブ pane の背景が地の色 (window-active-style)" || fail "window-active-style が bg=terminal でない"
 
 echo "=== 3b. 冪等性: start を再実行しても pane が増えない ==="
+# 旧版バイナリが構築した外側には古い設定値が残る。start の再実行で最新値へ揃うことを見る
+tmux -L "$OUT" set-option -g set-clipboard external
 RESTART_ERR=$(suzu start 2>&1 >/dev/null)
 [ "$(outer_panes)" = 2 ] && pass "start は冪等 (2 pane のまま)" || fail "start は冪等 (stderr: $RESTART_ERR)"
+[ "$(tmux -L "$OUT" show-options -gv set-clipboard)" = "on" ] && pass "start の再実行で外側の設定が再適用される (旧版で構築した外側にも最新値が入る)" || fail "start の再実行で外側の設定が再適用されない (set-clipboard=$(tmux -L "$OUT" show-options -gv set-clipboard))"
 
 inner_key_installed N && pass "内側に prefix+N のジャンプキーが注入されている" || fail "ジャンプキーの注入"
 inner_key_installed b && pass "内側に prefix+b の toggle キーが注入されている" || fail "toggle キーの注入"
@@ -445,8 +499,7 @@ for i in 1 2 3 4 5 6 7 8; do
 done
 # 端末代役を低い高さで作り直す (外側は最後に使われた client のサイズに合わせる)
 tmux -L "$T" kill-server 2>/dev/null
-tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y 18 \
-  "TMUX= tmux -L $OUT attach -t suzu" || fail "低い端末代役の起動"
+start_terminal_stand_in 18 "TMUX= tmux -L $OUT attach -t suzu" || fail "低い端末代役の起動"
 wait_for "[ \"\$(tmux -L $OUT display-message -p -t suzu:0 '#{window_height}' 2>/dev/null || echo 999)\" -le 20 ]" \
   || fail "外側が低い端末サイズに追従しない"
 
@@ -498,6 +551,154 @@ tmux -L "$T" send-keys -t term:0.0 q
 wait_for "! active_pane_is_sidebar" || fail "5i 後のフォーカス復帰"
 tmux -L "$IN" kill-window -t "$WIDE_ID" 2>/dev/null
 tmux -L "$IN" set-option -t test1:0.0 -pu @claude-waiting || fail "2 件目の @claude-waiting の解除"
+
+echo "=== 5j. プロセスで一致する pane のセクション (Claude 組み込み + 設定ファイルの Watchers) ==="
+# 通知の下に、プロセス名で一致した pane がセクションとして並ぶ。
+# Claude / Codex は組み込みで、画面から 実行中 (🏃) / 入力待ち (💤) を判定する
+sidebar_hides '-- Claude' && pass "該当プロセスが無い間はセクションを出さない" || fail "空のセクションが出ている"
+FAKE_CLAUDE=$(tmux -L "$IN" new-window -d -P -F '#{pane_id}' -t test2 -n fake-claude "sh $FAKE_BIN/claude") \
+  || fail "Claude 代役 window の作成"
+sidebar_shows '-- Claude (1) --' \
+  && pass "claude プロセスの pane が Claude セクションに出る" || fail "Claude セクションが出ない"
+sidebar_shows '🏃 ' \
+  && pass "実行中表示 (スピナー + 動詞… (経過時間)) を 🏃 と判定する" || fail "実行中と判定しない"
+sidebar_shows 'fake-claude' && pass "セクションの行に window 名が出る" || fail "window 名が出ない"
+
+# Enter で代役が入力待ち表示 (❯) に切り替わる。tmux はこれをイベントとして出さないため、
+# 時間駆動の見直し (SUZU_SCRAPE_INTERVAL=1) が拾う
+tmux -L "$IN" send-keys -t "$FAKE_CLAUDE" Enter
+sidebar_shows '💤 ' \
+  && pass "入力待ち表示になると 💤 に変わる (時間駆動の見直し)" || fail "入力待ちへの切り替わりを拾わない"
+
+FAKE_WATCHER=$(tmux -L "$IN" new-window -d -P -F '#{pane_id}' -t test2 -n fake-watcher "sh $FAKE_BIN/szv-fake-watcher") \
+  || fail "Watchers 代役 window の作成"
+sidebar_shows '-- Watchers (1) --' \
+  && pass "設定ファイルの section (Watchers) がスクリプト名で一致する" || fail "Watchers セクションが出ない"
+sidebar_shows '▶ ' && pass "汎用セクションの行は ▶ で出る" || fail "汎用セクションの行が出ない"
+
+# セクションの行からもジャンプできる。右 pane の client を test1 に戻してから、
+# フィルタでセクション名を指定して選ぶ
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test1 ]" || fail "5j のための client 復帰"
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "active_pane_is_sidebar" || fail "5j のためのフォーカス移動"
+tmux -L "$T" send-keys -l -t term:0.0 '/'
+tmux -L "$T" send-keys -l -t term:0.0 'Watchers'
+sidebar_shows 'filter: Watchers_ (1/' \
+  && pass "セクション名でも絞り込める" || fail "セクション名で絞り込めない"
+tmux -L "$T" send-keys -t term:0.0 Enter
+tmux -L "$T" send-keys -t term:0.0 Enter
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test2 ]" \
+  && pass "セクションの行から Enter でジャンプできる" || fail "セクションの行からジャンプできない"
+tmux -L "$T" send-keys -t term:0.0 Escape
+sidebar_hides 'filter:' || fail "5j のフィルタ解除"
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "5j 後のフォーカス復帰"
+
+# セクションで検出した pane が window の非アクティブ pane にいても、ジャンプでその pane を選ぶ。
+# split-window (-d なし) は新 pane をアクティブにするため、fake-claude 側が非アクティブになる
+tmux -L "$IN" split-window -t "$FAKE_CLAUDE" 'echo OTHER_PANE; exec sh' || fail "分割 pane の作成"
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test1 ]" || fail "select-pane 検証のための client 復帰"
+# fake-claude が非アクティブなことを確かめてからジャンプ
+[ "$(tmux -L "$IN" display-message -p -t "$FAKE_CLAUDE" '#{pane_active}')" = 0 ] \
+  && pass "検証の前提: 検出 pane は非アクティブ" || fail "検出 pane が非アクティブにならない"
+tmux -L "$T" send-keys -t term:0.0 C-b N; wait_for "active_pane_is_sidebar" || fail "select-pane 検証のためのフォーカス移動"
+tmux -L "$T" send-keys -l -t term:0.0 '/'; tmux -L "$T" send-keys -l -t term:0.0 'fake-claude'
+sidebar_shows 'filter: fake-claude' || fail "fake-claude で絞り込めない"
+tmux -L "$T" send-keys -t term:0.0 Enter; tmux -L "$T" send-keys -t term:0.0 Enter
+# ジャンプ後、検出 pane (非アクティブだった fake-claude) がアクティブになっていること
+wait_for "[ \"\$(tmux -L $IN display-message -p -t $FAKE_CLAUDE '#{pane_active}')\" = 1 ]" \
+  && pass "セクションのジャンプは検出 pane を select-pane する" || fail "ジャンプで検出 pane が選択されない"
+tmux -L "$T" send-keys -t term:0.0 Escape; sidebar_hides 'filter:' || fail "select-pane 検証後のフィルタ解除"
+tmux -L "$T" send-keys -t term:0.0 q; wait_for "! active_pane_is_sidebar" || fail "select-pane 検証後のフォーカス復帰"
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+
+# 代役が終わって pane が消えれば、window の close イベントでセクションも消える
+tmux -L "$IN" send-keys -t "$FAKE_CLAUDE" Enter
+sidebar_hides '-- Claude' \
+  && pass "claude プロセスが終わると Claude セクションが消える" || fail "終了後も Claude セクションが残る"
+tmux -L "$IN" kill-window -t "$FAKE_WATCHER" 2>/dev/null
+sidebar_hides '-- Watchers' \
+  && pass "window を閉じると Watchers セクションが消える" || fail "閉じた後も Watchers セクションが残る"
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+
+echo "=== 5k. コピーモード: prefix+[ が外側を素通りし、コピーの OSC52 が実端末まで届く ==="
+# キーは 1 回の send-keys に 1 つずつ渡す。tmux は assume-paste-time (既定 1ms) より短い
+# 間隔で 3 つ以上のキーが届くとペーストと見なして 3 つ目以降をキーとして解釈しない
+# (server-client.c の server_client_is_assume_paste)。"k V Enter" をまとめて渡すと
+# Enter が落ちて copy-selection が走らない (実測)。人の入力は 1ms より遅いので
+# 1 キーずつ送るのが実機に近い
+inner_state() { tmux -L "$IN" display-message -p -t test1:0.0 "$1" 2>/dev/null; }
+inner_in_copy_mode() { [ "$(inner_state '#{pane_in_mode}')" = 1 ]; }
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test1 ]" || fail "右 pane の client を test1 へ戻せない"
+# 内側 (代役) のキー表は -f /dev/null の既定 ($EDITOR に vi を含むと vi になる) に
+# 依存させず、送るキーが一意に決まる vi に固定する
+tmux -L "$IN" set-option -g mode-keys vi
+tmux -L "$IN" send-keys -t test1:0.0 'echo COPY_MODE_MARKER' Enter
+wait_for "tmux -L $IN capture-pane -p -t test1:0.0 2>/dev/null | grep -q '^COPY_MODE_MARKER'" \
+  || fail "コピー対象のマーカー行を出せない"
+tmux -L "$IN" delete-buffer 2>/dev/null
+
+tmux -L "$T" send-keys -t term:0.0 C-b [
+wait_for "inner_in_copy_mode" \
+  && pass "prefix+[ が外側を素通りして内側がコピーモードに入る" || fail "prefix+[ で内側がコピーモードに入らない"
+[ "$(tmux -L "$OUT" display-message -p -t "$(inner_pane_id)" '#{pane_in_mode}')" = 0 ] \
+  && pass "外側の pane はコピーモードに入らない (外側はキーを掴まない)" || fail "外側の pane がコピーモードに入った"
+
+# 内側のコピーは OSC52 で内側 client (= 外側の右 pane) へ流れ、外側がそれを実端末 (= T の pane) へ
+# 転送する。T の pane 出力を pipe-pane で溜め、実端末に届いたバイト列で照合する
+: > "$OSC52_LOG"
+tmux -L "$T" pipe-pane -t term:0.0 "cat >> '$OSC52_LOG'" || fail "T の pipe-pane を開始できない"
+tmux -L "$T" send-keys -t term:0.0 k
+tmux -L "$T" send-keys -t term:0.0 V
+wait_for "[ \"\$(inner_state '#{selection_present}')\" = 1 ]" \
+  && pass "k / V で行選択ができる" || fail "k / V で行選択ができない ($(inner_state 'cursor=#{copy_cursor_x},#{copy_cursor_y} sel=#{selection_present}'))"
+tmux -L "$T" send-keys -t term:0.0 Enter
+wait_for "! inner_in_copy_mode" \
+  && pass "Enter でコピーしてコピーモードを抜ける" || fail "Enter でコピーモードを抜けない"
+[ "$(tmux -L "$IN" show-buffer 2>/dev/null)" = "COPY_MODE_MARKER" ] \
+  && pass "内側の paste buffer に選択した行が入る" || fail "内側の paste buffer が選択した行でない ($(tmux -L "$IN" show-buffer 2>&1))"
+
+# 外側の set-clipboard が external だと、pane 内のアプリ (= 内側 tmux) が出す OSC52 を外側が捨てる
+# (tmux の input_osc_52 は set-clipboard on 以外で即 return)。on にした退行検出
+OSC52_EXPECTED=$(printf 'COPY_MODE_MARKER\n' | base64)
+wait_for "grep -q \$'\\033]52;' '$OSC52_LOG'" \
+  && pass "コピーの OSC52 が外側を透過して実端末 (T の pane) に届く" \
+  || fail "実端末に OSC52 が届かない (外側 set-clipboard=$(tmux -L "$OUT" show-options -gv set-clipboard))"
+grep -aoF "]52;;$OSC52_EXPECTED" "$OSC52_LOG" >/dev/null \
+  && pass "OSC52 の中身が選択した行の base64" || fail "OSC52 の中身が選択した行でない ($(grep -ao $'\033]52;[^\a]*' "$OSC52_LOG" | tr -d '\033' | head -1))"
+tmux -L "$T" pipe-pane -t term:0.0
+tmux -L "$IN" set-option -gu mode-keys
+
+echo "=== 5l. マウス: クリックでフォーカスが移り、ホイールは内側へ届く ==="
+# 実端末が送るマウスの SGR シーケンス (CSI < ボタン ; 列 ; 行 M/m) を T の pane へ書き込み、
+# 外側 client に読ませる。マウスキーは assume-paste の対象外なので押下と解放をまとめて送れる。
+# 列は 1 始まりで、サイドバー幅 40 の内側 (5) と右 pane (100) を打ち分ける
+mouse_click() { tmux -L "$T" send-keys -l -t term:0.0 "$(printf '\033[<0;%s;%sM\033[<0;%s;%sm' "$1" "$2" "$1" "$2")"; }
+mouse_wheel_up() { tmux -L "$T" send-keys -l -t term:0.0 "$(printf '\033[<64;%s;%sM' "$1" "$2")"; }
+! active_pane_is_sidebar || fail "5l の前提 (内側フォーカス) が崩れている"
+mouse_click 5 5
+wait_for "active_pane_is_sidebar" \
+  && pass "サイドバーのクリックでフォーカスが左へ移る" || fail "サイドバーをクリックしてもフォーカスが移らない"
+mouse_click 100 5
+wait_for "! active_pane_is_sidebar" \
+  && pass "右 pane のクリックでフォーカスが右へ移る" || fail "右 pane をクリックしてもフォーカスが戻らない"
+
+# 外側は右 pane のアプリ (= 内側 client) がマウスを要求している時だけイベントを転送する。
+# 内側 (代役) で mouse を on にすると、既定の WheelUpPane バインドでコピーモードに入るので、
+# それをホイールが内側まで届いた証拠にする
+tmux -L "$IN" set-option -g mouse on
+# 内側 client が外側の右 pane へマウス要求 (DECSET 1000 系) を書くのを待つ
+wait_for "[ \"\$(tmux -L $OUT display-message -p -t \"\$(inner_pane_id)\" '#{mouse_any_flag}')\" = 1 ]" \
+  && pass "内側の mouse on で右 pane がマウス要求を受ける" || fail "右 pane にマウス要求が届かない"
+mouse_wheel_up 100 10
+wait_for "inner_in_copy_mode" \
+  && pass "右 pane のホイールが内側 tmux に届く (WheelUpPane でコピーモード)" || fail "ホイールが内側に届かない"
+tmux -L "$IN" send-keys -t test1:0.0 -X cancel 2>/dev/null
+tmux -L "$IN" set-option -gu mouse
+wait_for "! inner_in_copy_mode" || fail "5l の後片付け (コピーモードの解除)"
 
 echo "=== 6. 通知の解除 ==="
 tmux -L "$IN" set-option -t test2:0.0 -pu @claude-waiting || fail "@claude-waiting の解除"
@@ -700,8 +901,8 @@ tmux -L "$OUT" kill-server 2>/dev/null
 echo "=== 8. tty から起動した時の attach と二重ネストのガード ==="
 # 非 tty の start は attach しないため、実端末から使う経路 (exec で tmux へ置き換わる) は
 # ここでしか通らない。$TMUX を外した pane 内で起動して再現する
-tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y 40 \
-  "env -u TMUX SUZU_OUTER_SOCKET='$OUT' SUZU_INNER_TMUX='tmux -L $IN' SUZU_INNER_TMUX_CMD='tmux -L $IN attach -t test1' SUZU_DOORBELL_FILE='$DOORBELL' '$SUZU_BIN' start" \
+start_terminal_stand_in 40 \
+  "env -u TMUX SUZU_OUTER_SOCKET='$OUT' SUZU_INNER_TMUX='tmux -L $IN' SUZU_INNER_TMUX_CMD='tmux -L $IN attach -t test1' SUZU_DOORBELL_FILE='$DOORBELL' SUZU_CONFIG_FILE='$CONFIG_FILE' SUZU_SCRAPE_INTERVAL=1 '$SUZU_BIN' start" \
   || fail "tty 付き start のための端末代役の起動"
 wait_for "[ \"\$(outer_panes)\" = 2 ]" \
   && pass "tty から start すると額縁が構築される" || fail "tty から start しても額縁ができない"
@@ -726,6 +927,8 @@ suzu_on_socket() {
   SUZU_INNER_TMUX="tmux -L $IN" \
   SUZU_INNER_TMUX_CMD="tmux -L $IN attach -t test1" \
   SUZU_DOORBELL_FILE="$DOORBELL" \
+  SUZU_CONFIG_FILE="$CONFIG_FILE" \
+  SUZU_SCRAPE_INTERVAL=1 \
     "$SUZU_BIN" "$@" </dev/null
 }
 panes_on() { tmux -L "$1" list-panes -t suzu:0 2>/dev/null | wc -l | tr -d ' '; }
