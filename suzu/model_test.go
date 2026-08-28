@@ -445,3 +445,111 @@ func TestViewShowsSessionHeadersAndFilterLine(t *testing.T) {
 		t.Error("一致しない session の見出しが残っている")
 	}
 }
+
+// 通知 1 件 + Claude セクション (2 pane) + 設定ファイル由来のセクション (1 pane)。
+// Claude の %1 は通知と同じ pane で、両方に出る
+func sectionedModel() model {
+	m := testModel()
+	m.connected = true
+	m.items = []Notification{
+		{Session: "work", WindowID: "@1", WindowIndex: "0", WindowName: "claude-work", PaneID: "%1", Icon: "🔔"},
+	}
+	m.sections = []paneSection{
+		{Title: "Claude", Items: []Notification{
+			{Section: "Claude", Session: "work", WindowID: "@1", WindowIndex: "0", WindowName: "claude-work", PaneID: "%1", Icon: iconAgentIdle},
+			{Section: "Claude", Session: "lab", WindowID: "@5", WindowIndex: "2", WindowName: "experiment", PaneID: "%5", Icon: iconAgentRunning},
+		}},
+		{Title: "Watchers", Items: []Notification{
+			{Section: "Watchers", Session: "ops", WindowID: "@7", WindowIndex: "0", WindowName: "watcher", PaneID: "%7", Icon: iconProcess},
+		}},
+	}
+	return m
+}
+
+func TestViewRendersSectionsBelowNotifications(t *testing.T) {
+	view := sectionedModel().View()
+	for _, want := range []string{
+		"Noroshi 🔔1",
+		"-- Claude (2) --",
+		"-- Watchers (1) --",
+		iconAgentRunning + " 2 experiment",
+		iconProcess + " 0 watcher",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("%q が描画されていない:\n%s", want, view)
+		}
+	}
+	// 通知のバッジ数はセクションの pane を数えない
+	if strings.Contains(view, "🔔4") {
+		t.Errorf("セクションの pane を通知件数に数えている:\n%s", view)
+	}
+	// 見出しはセクション → session の順で、通知の session 見出しより後に出る
+	if strings.Index(view, "-- Claude (2) --") < strings.Index(view, "▸ work (1)") {
+		t.Errorf("セクションが通知より前に出ている:\n%s", view)
+	}
+}
+
+func TestSectionsAreListedEvenWithoutNotifications(t *testing.T) {
+	m := sectionedModel()
+	m.items = nil
+	view := m.View()
+	if !strings.Contains(view, "通知なし") || !strings.Contains(view, "-- Claude (2) --") {
+		t.Fatalf("通知が無い時にセクションが消えた:\n%s", view)
+	}
+	// 「通知なし」の 1 行を layout が数えていないと、狭い画面でヘッダーが押し出される
+	m.height = 12
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) > m.height {
+		t.Errorf("描画が pane の高さ %d を超えた (%d 行)", m.height, len(lines))
+	}
+	if !strings.HasPrefix(lines[0], "Noroshi") {
+		t.Errorf("1 行目がヘッダーでない: %q", lines[0])
+	}
+}
+
+func TestCursorWalksAcrossSectionsAndRestoresByPane(t *testing.T) {
+	m := sectionedModel()
+	// 通知の %1 → Claude の %1 → Claude の %5 → Watchers の %7
+	m, _ = pressKeys(m, runesKey("j"), runesKey("j"))
+	if got := m.selectedPaneID(); got != "%5" {
+		t.Fatalf("セクションを跨いで選べていない: %q", got)
+	}
+	m, _ = pressKeys(m, runesKey("j"))
+	if got := m.selectedPaneID(); got != "%7" {
+		t.Fatalf("2 つ目のセクションへ進めない: %q", got)
+	}
+
+	// Claude の %1 (通知の %1 と同じ pane) を選んだ状態で通知が消えても、同じ行に留まる
+	m, _ = pressKeys(m, runesKey("k"), runesKey("k"))
+	if got, _ := m.selected(); got.Section != "Claude" || got.PaneID != "%1" {
+		t.Fatalf("前提が崩れている: %+v", got)
+	}
+	refreshed, _ := m.Update(notificationsMsg{items: nil})
+	if got, _ := refreshed.(model).selected(); got.Section != "Claude" || got.PaneID != "%1" {
+		t.Errorf("通知が消えた後に選択が別の行へずれた: %+v", got)
+	}
+}
+
+func TestFilterMatchesSectionTitle(t *testing.T) {
+	m := sectionedModel()
+	m, _ = pressKeys(m, runesKey("/"), runesKey("w"), runesKey("a"), runesKey("t"), runesKey("c"), tea.KeyMsg{Type: tea.KeyEnter})
+	visible := m.visible()
+	if len(visible) != 1 || visible[0].PaneID != "%7" {
+		t.Fatalf("watc の一致 = %+v", visible)
+	}
+	view := m.View()
+	if strings.Contains(view, "-- Claude") {
+		t.Errorf("一致しないセクションの見出しが残っている:\n%s", view)
+	}
+
+	// セクション名だけに一致するクエリでも、そのセクションの行が全部残る
+	m, _ = pressKeys(m, tea.KeyMsg{Type: tea.KeyEsc}, runesKey("/"), runesKey("c"), runesKey("l"), runesKey("a"), runesKey("u"), tea.KeyMsg{Type: tea.KeyEnter})
+	visible = m.visible()
+	if len(visible) != 3 {
+		t.Fatalf("clau の一致件数 = %d: %+v", len(visible), visible)
+	}
+	// 通知の claude-work (window 名) と Claude セクションの 2 行 (セクション名)
+	if visible[0].Section != "" || visible[1].Section != "Claude" || visible[2].PaneID != "%5" {
+		t.Errorf("一致した行が誤り: %+v", visible)
+	}
+}

@@ -28,6 +28,16 @@
 //	SUZU_SIDEBAR_WIDTH     サイドバーの幅 (default: 40)
 //	SUZU_DOORBELL_FILE     @claude-waiting の変化をサイドバーへ知らせる touch 先
 //	                       (default: ${XDG_STATE_HOME:-$HOME/.local/state}/suzu/doorbell)
+//	SUZU_SCRAPE_INTERVAL   pane 内のプロセスと画面内容を見直す間隔 (秒。default: 5、0 で止める)
+//	SUZU_CONFIG_FILE       設定ファイル (default: ${XDG_CONFIG_HOME:-$HOME/.config}/suzu/config)
+//
+// サイドバーは通知 (@claude-waiting) の下に、特定のプロセスが動いている pane を並べる
+// セクションを持つ。Claude / Codex のセクションは組み込みで、pane の画面から
+// 実行中 (🏃) / 入力待ち (💤) を判定する。それ以外のセクションは設定ファイルに
+// key = value 形式で足す (config.go の parseSectionRules):
+//
+//	# section = セクション名:プロセス名 (実行ファイルやスクリプトの basename)
+//	section = Watchers:tmux-issue-watcher
 package main
 
 import (

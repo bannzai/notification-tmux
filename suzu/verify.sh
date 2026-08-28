@@ -27,6 +27,9 @@ STALE="szv-stale-$$"
 BROKEN="szv-broken-$$"
 DOORBELL_DIR="$TMP_DIR/phase2-doorbell-$$"
 DOORBELL="$DOORBELL_DIR/doorbell"
+# セクションの設定ファイルと、Claude Code / 常駐スクリプトの代役 (プロセス名で一致させる)
+CONFIG_FILE="$DOORBELL_DIR/config"
+FAKE_BIN="$DOORBELL_DIR/bin"
 FAIL=0
 
 pass() { echo "PASS: $1"; }
@@ -49,6 +52,7 @@ dump_state() {
   tmux -L "$IN" list-clients -F '#{client_name} control=#{client_control_mode} tty=#{client_tty}' 2>&1
   echo "[inner hooks/keys]"
   tmux -L "$IN" show-hooks -g after-set-option 2>&1
+  tmux -L "$IN" show-hooks -g pane-title-changed 2>&1
   tmux -L "$IN" list-keys -T prefix 2>&1 | grep -E "^bind-key +(-r +)?-T +prefix +(N|b|Z) "
   # suzu が使う format の区切り (US, 0x1f) と pane option の読み出しが、この tmux 版で
   # 素通しされるかを見る。旧版で _ に置き換わる等の差があればここで分かる
@@ -63,6 +67,10 @@ dump_state() {
   tmux -L "$IN" list-panes -a -F '#{pane_id}' 2>/dev/null | while read -r pane; do
     printf '%s local=[%s]\n' "$pane" "$(tmux -L "$IN" show-options -p -q -v -t "$pane" @claude-waiting 2>&1)"
   done
+  # セクションが pane のプロセス木をどう見ているか (suzu/sections.go と同じ問い合わせ)
+  echo "[inner pane processes]"
+  tmux -L "$IN" list-panes -a -F '#{pane_id} pid=#{pane_pid} cmd=#{pane_current_command}' 2>&1
+  ps -e -ww -o pid=,ppid=,args= 2>&1 | grep -F "$FAKE_BIN" | grep -v grep
   echo "--- end state ---"
 }
 
@@ -90,11 +98,15 @@ trap 'exit 130' INT TERM
 trap cleanup EXIT
 
 # suzu を隔離 socket 向けの環境で実行する
+# SUZU_CONFIG_FILE は、実行者の ~/.config/suzu/config を読まないよう必ず隔離する。
+# SUZU_SCRAPE_INTERVAL=1 は既定の 5 秒より短くして待ち時間を詰めるため
 suzu() {
   SUZU_OUTER_SOCKET="$OUT" \
   SUZU_INNER_TMUX="tmux -L $IN" \
   SUZU_INNER_TMUX_CMD="tmux -L $IN attach -t test1" \
   SUZU_DOORBELL_FILE="$DOORBELL" \
+  SUZU_CONFIG_FILE="$CONFIG_FILE" \
+  SUZU_SCRAPE_INTERVAL=1 \
     "$SUZU_BIN" "$@" </dev/null
 }
 
@@ -163,6 +175,10 @@ doorbell_hook_count() {
   tmux -L "$IN" show-hooks -g after-set-option 2>/dev/null | grep -cF -- "$DOORBELL"
 }
 
+title_hook_count() {
+  tmux -L "$IN" show-hooks -g pane-title-changed 2>/dev/null | grep -cF -- "$DOORBELL"
+}
+
 inner_hook_installed() {
   [ "$(doorbell_hook_count)" -ge 1 ]
 }
@@ -180,6 +196,28 @@ else
   echo "RESULT: FAILED"
   exit 1
 fi
+
+echo "=== 1b. セクションの設定ファイルと代役プロセスを用意 ==="
+mkdir -p "$FAKE_BIN"
+cat >"$CONFIG_FILE" <<'CONF'
+# 設定ファイルの section 行で汎用セクションを足す (Claude / Codex は組み込み)
+section = Watchers:szv-fake-watcher
+CONF
+# Claude Code の代役。実機の capture-pane と同じ実行中表示を出し、Enter で入力待ち表示へ、
+# もう一度 Enter で終了する。sh スクリプトなので ps では "sh .../claude" と見え、
+# 実行ファイル名ではなく引数の basename で claude と一致する経路を通る
+cat >"$FAKE_BIN/claude" <<'FAKE'
+printf '✶ Swirling… (3s · ↓ 1.0k tokens)\n'
+read -r _
+printf '\033[2J\033[H❯ \n'
+read -r _
+FAKE
+# 常駐スクリプトの代役 (tmux-issue-watcher 相当)
+cat >"$FAKE_BIN/szv-fake-watcher" <<'FAKE'
+read -r _
+FAKE
+[ -f "$CONFIG_FILE" ] && [ -f "$FAKE_BIN/claude" ] && [ -f "$FAKE_BIN/szv-fake-watcher" ] \
+  && pass "設定ファイルと代役スクリプトを配置" || fail "設定ファイルと代役スクリプトの配置"
 
 echo "=== 2. 内側 (代役) server を隔離 socket で起動 (test1 / test2) ==="
 tmux -L "$IN" -f /dev/null new-session -d -s test1 -x 200 -y 50 \
@@ -228,6 +266,15 @@ inner_key_installed N && pass "内側に prefix+N のジャンプキーが注入
 inner_key_installed b && pass "内側に prefix+b の toggle キーが注入されている" || fail "toggle キーの注入"
 inner_hook_installed \
   && pass "内側に after-set-option hook が注入されている" || fail "after-set-option hook の注入"
+[ "$(title_hook_count)" -ge 1 ] \
+  && pass "内側に pane-title-changed hook が注入されている" || fail "pane-title-changed hook の注入"
+
+# pane のタイトル変更 (シェルのプロンプトや Claude Code が行う) が doorbell を鳴らすこと
+MARK="$DOORBELL_DIR/mark"
+touch "$MARK"
+tmux -L "$IN" select-pane -t test2:0.0 -T HOOK_TITLE_MARKER
+wait_for "[ \"$DOORBELL\" -nt \"$MARK\" ]" \
+  && pass "pane のタイトル変更で doorbell が鳴る" || fail "pane-title-changed hook が doorbell を鳴らさない"
 
 sidebar_shows 'Noroshi' && pass "サイドバーが描画される" || fail "サイドバーが描画されない"
 sidebar_shows '通知なし' && pass "通知が無い時は「通知なし」" || fail "「通知なし」が描画されない"
@@ -499,6 +546,58 @@ wait_for "! active_pane_is_sidebar" || fail "5i 後のフォーカス復帰"
 tmux -L "$IN" kill-window -t "$WIDE_ID" 2>/dev/null
 tmux -L "$IN" set-option -t test1:0.0 -pu @claude-waiting || fail "2 件目の @claude-waiting の解除"
 
+echo "=== 5j. プロセスで一致する pane のセクション (Claude 組み込み + 設定ファイルの Watchers) ==="
+# 通知の下に、プロセス名で一致した pane がセクションとして並ぶ。
+# Claude / Codex は組み込みで、画面から 実行中 (🏃) / 入力待ち (💤) を判定する
+sidebar_hides '-- Claude' && pass "該当プロセスが無い間はセクションを出さない" || fail "空のセクションが出ている"
+FAKE_CLAUDE=$(tmux -L "$IN" new-window -d -P -F '#{pane_id}' -t test2 -n fake-claude "sh $FAKE_BIN/claude") \
+  || fail "Claude 代役 window の作成"
+sidebar_shows '-- Claude (1) --' \
+  && pass "claude プロセスの pane が Claude セクションに出る" || fail "Claude セクションが出ない"
+sidebar_shows '🏃 ' \
+  && pass "実行中表示 (スピナー + 動詞… (経過時間)) を 🏃 と判定する" || fail "実行中と判定しない"
+sidebar_shows 'fake-claude' && pass "セクションの行に window 名が出る" || fail "window 名が出ない"
+
+# Enter で代役が入力待ち表示 (❯) に切り替わる。tmux はこれをイベントとして出さないため、
+# 時間駆動の見直し (SUZU_SCRAPE_INTERVAL=1) が拾う
+tmux -L "$IN" send-keys -t "$FAKE_CLAUDE" Enter
+sidebar_shows '💤 ' \
+  && pass "入力待ち表示になると 💤 に変わる (時間駆動の見直し)" || fail "入力待ちへの切り替わりを拾わない"
+
+FAKE_WATCHER=$(tmux -L "$IN" new-window -d -P -F '#{pane_id}' -t test2 -n fake-watcher "sh $FAKE_BIN/szv-fake-watcher") \
+  || fail "Watchers 代役 window の作成"
+sidebar_shows '-- Watchers (1) --' \
+  && pass "設定ファイルの section (Watchers) がスクリプト名で一致する" || fail "Watchers セクションが出ない"
+sidebar_shows '▶ ' && pass "汎用セクションの行は ▶ で出る" || fail "汎用セクションの行が出ない"
+
+# セクションの行からもジャンプできる。右 pane の client を test1 に戻してから、
+# フィルタでセクション名を指定して選ぶ
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test1 ]" || fail "5j のための client 復帰"
+tmux -L "$T" send-keys -t term:0.0 C-b N
+wait_for "active_pane_is_sidebar" || fail "5j のためのフォーカス移動"
+tmux -L "$T" send-keys -l -t term:0.0 '/'
+tmux -L "$T" send-keys -l -t term:0.0 'Watchers'
+sidebar_shows 'filter: Watchers_ (1/' \
+  && pass "セクション名でも絞り込める" || fail "セクション名で絞り込めない"
+tmux -L "$T" send-keys -t term:0.0 Enter
+tmux -L "$T" send-keys -t term:0.0 Enter
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test2 ]" \
+  && pass "セクションの行から Enter でジャンプできる" || fail "セクションの行からジャンプできない"
+tmux -L "$T" send-keys -t term:0.0 Escape
+sidebar_hides 'filter:' || fail "5j のフィルタ解除"
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "5j 後のフォーカス復帰"
+
+# 代役が終わって pane が消えれば、window の close イベントでセクションも消える
+tmux -L "$IN" send-keys -t "$FAKE_CLAUDE" Enter
+sidebar_hides '-- Claude' \
+  && pass "claude プロセスが終わると Claude セクションが消える" || fail "終了後も Claude セクションが残る"
+tmux -L "$IN" kill-window -t "$FAKE_WATCHER" 2>/dev/null
+sidebar_hides '-- Watchers' \
+  && pass "window を閉じると Watchers セクションが消える" || fail "閉じた後も Watchers セクションが残る"
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+
 echo "=== 6. 通知の解除 ==="
 tmux -L "$IN" set-option -t test2:0.0 -pu @claude-waiting || fail "@claude-waiting の解除"
 sidebar_shows '通知なし' && pass "解除で「通知なし」に戻る" || fail "解除しても「通知なし」に戻らない"
@@ -590,6 +689,8 @@ inner_key_installed b \
   && fail "stop 後も toggle キーが残っている" || pass "stop で toggle キー (prefix+b) が解除された"
 [ "$(doorbell_hook_count)" = 0 ] \
   && pass "stop で doorbell hook が解除された" || fail "stop 後も doorbell hook が残っている"
+[ "$(title_hook_count)" = 0 ] \
+  && pass "stop で pane-title-changed hook が解除された" || fail "stop 後も pane-title-changed hook が残っている"
 tmux -L "$IN" list-keys -T prefix 2>/dev/null | grep -E "^bind-key +(-r +)?-T +prefix +Z " | grep -q USER_BIND_MARKER \
   && pass "ユーザー自身の bind は残る" || fail "ユーザー自身の bind まで消した"
 tmux -L "$IN" show-hooks -g after-set-option 2>/dev/null | grep -q USER_HOOK_MARKER \
@@ -617,7 +718,7 @@ echo "=== 8. tty から起動した時の attach と二重ネストのガード 
 # 非 tty の start は attach しないため、実端末から使う経路 (exec で tmux へ置き換わる) は
 # ここでしか通らない。$TMUX を外した pane 内で起動して再現する
 tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y 40 \
-  "env -u TMUX SUZU_OUTER_SOCKET='$OUT' SUZU_INNER_TMUX='tmux -L $IN' SUZU_INNER_TMUX_CMD='tmux -L $IN attach -t test1' SUZU_DOORBELL_FILE='$DOORBELL' '$SUZU_BIN' start" \
+  "env -u TMUX SUZU_OUTER_SOCKET='$OUT' SUZU_INNER_TMUX='tmux -L $IN' SUZU_INNER_TMUX_CMD='tmux -L $IN attach -t test1' SUZU_DOORBELL_FILE='$DOORBELL' SUZU_CONFIG_FILE='$CONFIG_FILE' SUZU_SCRAPE_INTERVAL=1 '$SUZU_BIN' start" \
   || fail "tty 付き start のための端末代役の起動"
 wait_for "[ \"\$(outer_panes)\" = 2 ]" \
   && pass "tty から start すると額縁が構築される" || fail "tty から start しても額縁ができない"
@@ -642,6 +743,8 @@ suzu_on_socket() {
   SUZU_INNER_TMUX="tmux -L $IN" \
   SUZU_INNER_TMUX_CMD="tmux -L $IN attach -t test1" \
   SUZU_DOORBELL_FILE="$DOORBELL" \
+  SUZU_CONFIG_FILE="$CONFIG_FILE" \
+  SUZU_SCRAPE_INTERVAL=1 \
     "$SUZU_BIN" "$@" </dev/null
 }
 panes_on() { tmux -L "$1" list-panes -t suzu:0 2>/dev/null | wc -l | tr -d ' '; }

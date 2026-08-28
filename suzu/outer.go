@@ -187,29 +187,36 @@ func findPrefixKeyBinding(listKeysOutput string, key string) string {
 	return ""
 }
 
-// 内側 tmux の「どこかで set-option された」を doorbell ファイルへ伝える hook を注入する
-// (メモリ上のみ・冪等)。control mode の購読は attach 中 session の pane に限られるため、
-// 別 session の @claude-waiting を拾う経路はこの global hook が担う。
+// doorbell ファイルを touch する global hook。
+//   - after-set-option: どこかで set-option された (= @claude-waiting の変化)。control mode の
+//     購読は attach 中 session の pane に限られるため、別 session の通知はこの hook が担う
+//   - pane-title-changed: pane のタイトルが変わった。シェルのプロンプトや Claude Code は
+//     コマンドの開始・終了でタイトルを更新するため、pane 内のプロセスの入れ替わりを
+//     時間駆動の見直し (watcher.go) を待たずに拾える
+var doorbellHooks = []string{"after-set-option", "pane-title-changed"}
+
+// 内側 tmux へ doorbell hook を注入する (メモリ上のみ・冪等)。
 // hook 内で set-option すると再帰発火するため touch しか行わない。
-// -g (置換) ではなく -ga (配列への追記) を使い、ユーザー自身の
-// after-set-option hook を消さないようにする
+// -g (置換) ではなく -ga (配列への追記) を使い、ユーザー自身の hook を消さないようにする
 func installDoorbellHook(cfg Config) {
 	if err := os.MkdirAll(filepath.Dir(cfg.DoorbellFile), 0o755); err != nil {
 		return
 	}
-	if len(doorbellHookTargets(cfg)) > 0 {
-		return
+	for _, hook := range doorbellHooks {
+		if len(doorbellHookTargets(cfg, hook)) > 0 {
+			continue
+		}
+		cfg.innerCommand("set-hook", "-ga", hook,
+			"run-shell -b "+shellQuote("touch "+shellQuote(cfg.DoorbellFile))).Run()
 	}
-	cfg.innerCommand("set-hook", "-ga", "after-set-option",
-		"run-shell -b "+shellQuote("touch "+shellQuote(cfg.DoorbellFile))).Run()
 }
 
-func doorbellHookTargets(cfg Config) []string {
-	out, err := output(cfg.innerCommand("show-hooks", "-g", "after-set-option"))
+func doorbellHookTargets(cfg Config, hook string) []string {
+	out, err := output(cfg.innerCommand("show-hooks", "-g", hook))
 	if err != nil {
 		return nil
 	}
-	return parseDoorbellHookTargets(out, cfg.DoorbellFile)
+	return parseDoorbellHookTargets(out, hook, cfg.DoorbellFile)
 }
 
 // show-hooks の出力から、doorbell ファイルを touch する自分のエントリだけを拾い、
@@ -217,11 +224,11 @@ func doorbellHookTargets(cfg Config) []string {
 // tmux 3.6 は値の入った hook を配列表記 (after-set-option[0] <command>) で出し、
 // 未設定なら名前だけの行になる。添字を持たない単独エントリ表記の版もあるため両方受ける。
 // 添字は解除しても振り直されないため、複数拾っても順に解除してよい
-func parseDoorbellHookTargets(out string, doorbellFile string) []string {
+func parseDoorbellHookTargets(out string, hook string, doorbellFile string) []string {
 	var targets []string
 	for _, line := range strings.Split(out, "\n") {
 		name, command, found := strings.Cut(strings.TrimSpace(line), " ")
-		if !found || !strings.HasPrefix(name, "after-set-option") {
+		if !found || !strings.HasPrefix(name, hook) {
 			continue
 		}
 		if strings.Contains(command, doorbellFile) {
@@ -435,8 +442,10 @@ func cmdStop(cfg Config) error {
 	// どちらも「自分が入れたもの」だけを狙って外し、ユーザー自身の bind・hook は残す
 	unbindInjectedKey(cfg, cfg.JumpKey)
 	unbindInjectedKey(cfg, cfg.ToggleKey)
-	for _, target := range doorbellHookTargets(cfg) {
-		cfg.innerCommand("set-hook", "-gu", target).Run()
+	for _, hook := range doorbellHooks {
+		for _, target := range doorbellHookTargets(cfg, hook) {
+			cfg.innerCommand("set-hook", "-gu", target).Run()
+		}
 	}
 	if !outerExists(cfg) {
 		fmt.Printf("外側 tmux (socket: %s): 未起動\n", cfg.OuterSocket)

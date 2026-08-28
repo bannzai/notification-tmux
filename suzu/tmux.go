@@ -9,9 +9,12 @@ import (
 	"strings"
 )
 
-// @claude-waiting が set された window 1 件。pane と window の両方に set されるため
-// window 単位に畳んだ後の姿を表す
+// サイドバーの 1 行分の pane。通知 (@claude-waiting が set された window。pane と window の
+// 両方に set されるため window 単位に畳んだ後の姿) と、セクション (sections.go) の
+// プロセス一致 pane の両方をこの型で運ぶ
 type Notification struct {
+	// 属するセクションの名前。通知は空
+	Section string
 	Session string
 	// switch-client の target に使う。tmux は `%` `$` `@` で始まる target を
 	// pane/session/window の ID として解釈するため、その形の session 名は
@@ -22,6 +25,12 @@ type Notification struct {
 	WindowName  string
 	PaneID      string
 	Icon        string
+}
+
+// 再取得の前後で同じ行を探し直すための識別子。同じ pane が通知と Claude セクションの
+// 両方に出ることがあるため、pane だけでなくセクションも含める
+func (n Notification) key() string {
+	return n.Section + fieldSeparator + n.PaneID
 }
 
 // 外側 tmux でサイドバーの隣にいる pane。内側 tmux へ attach している右 pane を指す
@@ -133,6 +142,8 @@ func withDetail(err error, stderr string) error {
 	return fmt.Errorf("%w (%s)", err, strings.ReplaceAll(detail, "\n", " / "))
 }
 
+// 通知一覧 (@claude-waiting) を取り直す。list-panes だけで速いため、遅い ps を伴う
+// セクション取得 (fetchSectionsMsg) とは別メッセージに分ける
 func fetchNotifications(cfg Config) notificationsMsg {
 	out, err := output(cfg.innerCommand("list-panes", "-a", "-f", waitingFilter, "-F", waitingFormat))
 	if err != nil {
@@ -140,6 +151,11 @@ func fetchNotifications(cfg Config) notificationsMsg {
 		return notificationsMsg{err: fmt.Errorf("通知一覧の取得に失敗: %w", err)}
 	}
 	return notificationsMsg{items: parseNotifications(out, cfg.paneWaitingOption)}
+}
+
+// セクション (プロセス別の pane 一覧) を取り直す
+func fetchSectionsMsg(cfg Config) sectionsMsg {
+	return sectionsMsg{sections: fetchSections(cfg)}
 }
 
 // pane ローカルに set された @claude-waiting。window から継承しただけの pane では空になる。
