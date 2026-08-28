@@ -553,3 +553,27 @@ func TestFilterMatchesSectionTitle(t *testing.T) {
 		t.Errorf("一致した行が誤り: %+v", visible)
 	}
 }
+
+func TestFilterDenominatorCountsSectionRows(t *testing.T) {
+	m := sectionedModel()
+	// 通知 1 + Claude 2 + Watchers 1 = 全 4 行が分母
+	m, _ = pressKeys(m, runesKey("/"), runesKey("w"), runesKey("a"), runesKey("t"))
+	if want := "filter: wat_ (1/4)"; !strings.Contains(m.View(), want) {
+		t.Errorf("フィルタの分母がセクション行を含んでいない (want %q):\n%s", want, m.View())
+	}
+}
+
+func TestSectionKeyDistinguishesSameTitleRows(t *testing.T) {
+	// 同名タイトル・同一 pane でも、生成元 rule (Process) が違えば key は別になり、
+	// 再取得で選択が別の行へ飛ばない
+	builtin := Notification{Section: "Claude", SectionKey: "claude", PaneID: "%1"}
+	wrapper := Notification{Section: "Claude", SectionKey: "my-wrapper", PaneID: "%1"}
+	if builtin.key() == wrapper.key() {
+		t.Errorf("同名タイトル・同一 pane の key が衝突している: %q", builtin.key())
+	}
+	// 通知 (SectionKey 空) はセクション行と別の key
+	notif := Notification{Section: "", SectionKey: "", PaneID: "%1"}
+	if notif.key() == builtin.key() {
+		t.Errorf("通知とセクション行の key が衝突している: %q", notif.key())
+	}
+}

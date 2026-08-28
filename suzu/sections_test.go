@@ -23,7 +23,8 @@ func sampleProcesses() []process {
 			psLine("300", "1", "-zsh") +
 			psLine("301", "300", "/bin/zsh /Users/me/bin/tmux-issue-watcher") +
 			psLine("400", "1", "-zsh") +
-			psLine("500", "1", "/bin/sh -c sh /tmp/fake/claude"),
+			psLine("500", "1", "sh /tmp/fake/claude") +
+			psLine("600", "1", "vim /tmp/claude"),
 	)
 }
 
@@ -32,13 +33,14 @@ func samplePanes() []pane {
 		tmuxLine("work", "$0", "@2", "1", "codex-work", "%2", "200") +
 		tmuxLine("ops", "$1", "@3", "0", "watcher", "%3", "300") +
 		tmuxLine("ops", "$1", "@4", "1", "shell", "%4", "400") +
-		tmuxLine("ops", "$1", "@5", "2", "fake", "%5", "500")
+		tmuxLine("ops", "$1", "@5", "2", "fake", "%5", "500") +
+		tmuxLine("ops", "$1", "@6", "3", "editor", "%6", "600")
 	return parsePanes(out)
 }
 
 func TestParsePanesReadsPanePID(t *testing.T) {
 	panes := samplePanes()
-	if len(panes) != 5 {
+	if len(panes) != 6 {
 		t.Fatalf("pane 数 = %d: %+v", len(panes), panes)
 	}
 	if panes[0].PID != 100 || panes[0].PaneID != "%1" || panes[0].Session != "work" || panes[0].WindowName != "claude-work" {
@@ -76,8 +78,9 @@ func TestMatchSectionsFindsProcessesAnywhereInPaneTree(t *testing.T) {
 	if got := strings.Join(titles, ","); got != "Claude,Codex,Watchers" {
 		t.Fatalf("セクションの並び = %q", got)
 	}
-	// Claude: 子プロセス (claude) の実行ファイル名で一致。sh スクリプト経由の偽物も
-	// 引数の basename で一致する (pane のルートプロセス自身も対象)
+	// Claude: 子プロセス (claude) の実行ファイル名で一致 (%1)。sh がスクリプトとして
+	// 起動した claude も、インタプリタ経由のスクリプト引数として一致する (%5)。
+	// vim /tmp/claude (%6) は通常引数なので一致しない
 	if got := paneIDs(sections[0]); got != "%1,%5" {
 		t.Errorf("Claude セクションの pane = %q", got)
 	}
@@ -286,5 +289,48 @@ func TestMatchSectionsCarriesAgentFromRuleNotTitle(t *testing.T) {
 	}
 	if sections[1].Agent || paneIDs(sections[1]) != "%2" {
 		t.Errorf("同名の汎用セクションが Agent 扱いになっている: %+v", sections[1])
+	}
+}
+
+func TestCommandNamesLimitsToExecutableAndScript(t *testing.T) {
+	cases := []struct {
+		args string
+		want string
+	}{
+		// 実行ファイルの basename
+		{"claude -c", "claude"},
+		{"/usr/local/bin/claude resume", "claude"},
+		// ログインシェルの argv[0] の先頭 - を落とす
+		{"-zsh", "zsh"},
+		// インタプリタ + スクリプト引数 (先頭の非オプション引数) の basename
+		{"node /Users/me/.anyenv/bin/codex resume --last", "node,codex"},
+		{"/bin/zsh /Users/me/bin/tmux-issue-watcher", "zsh,tmux-issue-watcher"},
+		{"python3 -u /opt/app/worker.py", "python3,worker.py"},
+		// インタプリタでない実行ファイルの引数は名前に数えない (誤一致の防止)
+		{"vim /tmp/claude", "vim"},
+		{"tail -f /var/log/codex", "tail"},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := strings.Join(commandNames(c.args), ","); got != c.want {
+			t.Errorf("commandNames(%q) = %q, want %q", c.args, got, c.want)
+		}
+	}
+}
+
+func TestAgentIconIgnoresConversationInterruptText(t *testing.T) {
+	// Claude/Codex が会話本文で "esc to interrupt" の語を説明として書き、その行が末尾に
+	// 残ったまま入力待ちになっても、括弧のステータス形式でなければ実行中と判定しない
+	idle := []string{
+		"To stop me, press Esc to interrupt the current turn.",
+		"❯ ",
+	}
+	if got := agentIcon(idle); got != iconAgentIdle {
+		t.Errorf("会話本文の to interrupt を実行中と判定した: %q", got)
+	}
+	// 括弧内のステータスヒントは実行中
+	running := []string{"• Working (12s • esc to interrupt)", "› "}
+	if got := agentIcon(running); got != iconAgentRunning {
+		t.Errorf("括弧のステータスヒントを実行中と判定しない: %q", got)
 	}
 }

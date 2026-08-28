@@ -25,12 +25,16 @@ type Notification struct {
 	WindowName  string
 	PaneID      string
 	Icon        string
+	// セクションの一意識別 (生成元 rule の Process)。同名タイトルのセクション
+	// (組み込み Claude と設定の section = Claude:my-wrapper 等) を区別するため key() に含める。
+	// 通知は空
+	SectionKey string
 }
 
-// 再取得の前後で同じ行を探し直すための識別子。同じ pane が通知と Claude セクションの
-// 両方に出ることがあるため、pane だけでなくセクションも含める
+// 再取得の前後で同じ行を探し直すための識別子。同じ pane が通知と複数のセクションに
+// 出ることがあるため、pane だけでなくセクションのタイトルと一意識別も含める
 func (n Notification) key() string {
-	return n.Section + fieldSeparator + n.PaneID
+	return n.Section + fieldSeparator + n.SectionKey + fieldSeparator + n.PaneID
 }
 
 // 外側 tmux でサイドバーの隣にいる pane。内側 tmux へ attach している右 pane を指す

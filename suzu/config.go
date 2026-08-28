@@ -85,11 +85,16 @@ func loadConfig() Config {
 	return cfg
 }
 
-// 設定ファイルの section 行を読む。ファイルが無いのは通常の状態なので黙って空を返し、
+// 設定ファイルの section 行を読む。ファイルが無いのは通常の状態なので黙って空を返す。
+// 存在するのに開けない (権限不足・パスがディレクトリ・fd 枯渇等) 場合は、設定が正しいのに
+// セクションが出ない状態をユーザーが診断できるよう stderr へ知らせる。
 // 書式の誤りは行ごとに stderr へ知らせて読み飛ばす (start を打った端末に出る)
 func loadSectionRules(path string) []sectionRule {
 	file, err := os.Open(path)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "%s: 設定ファイルを開けません: %v\n", path, err)
+		}
 		return nil
 	}
 	defer file.Close()

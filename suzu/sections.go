@@ -53,8 +53,10 @@ const (
 var claudeSpinnerLine = regexp.MustCompile(`^\s*[·✢✳✶✻✽*]\s+\S+…\s+\(`)
 
 // Codex CLI の実行中表示 ("• Working (12s • esc to interrupt)") と、旧 Claude Code の
-// "(esc to interrupt)"。"interrupted" (中断済みの案内) には一致させない
-var interruptHintLine = regexp.MustCompile(`(?i)\bto interrupt\b`)
+// "(esc to interrupt)"。括弧内のステータスヒントに限定し、会話本文に "esc to interrupt" の
+// 語が現れただけの行 (Claude/Codex が説明として書いた文) を実行中と誤判定しない。
+// "interrupted" (中断済みの案内) にも一致させない
+var interruptHintLine = regexp.MustCompile(`(?i)\([^()]*\bto interrupt\b`)
 
 func fetchSections(cfg Config) []paneSection {
 	if len(cfg.Sections) == 0 {
@@ -149,6 +151,7 @@ func matchSections(rules []sectionRule, panes []pane, processes []process) []pan
 			}
 			item := pane.Notification
 			item.Section = rule.Title
+			item.SectionKey = rule.Process
 			item.Icon = iconProcess
 			sections[i].Items = append(sections[i].Items, item)
 		}
@@ -162,9 +165,7 @@ func matchSections(rules []sectionRule, panes []pane, processes []process) []pan
 	return populated
 }
 
-// root とその子孫のプロセスが名乗る名前。Claude Code は実行ファイル名 (claude) で分かるが、
-// tmux-issue-watcher のようなスクリプトは "/bin/zsh /path/to/tmux-issue-watcher" と
-// インタプリタが先頭に来るため、args の各語の basename をすべて名前として数える
+// root とその子孫のプロセスが名乗る名前。各プロセスの commandNames を集める
 func processNames(root int, byPID map[int]process, children map[int][]process) map[string]bool {
 	names := map[string]bool{}
 	queue := []int{root}
@@ -177,14 +178,45 @@ func processNames(root int, byPID map[int]process, children map[int][]process) m
 		}
 		visited[pid] = true
 		if p, ok := byPID[pid]; ok {
-			for _, word := range strings.Fields(p.Args) {
-				// tmux がデフォルトシェルをログインシェルで起動すると argv[0] が -zsh / -bash に
-				// なる。実行ファイルの basename で一致させたいので先頭のログインシェル用 - を落とす
-				names[strings.TrimPrefix(filepath.Base(word), "-")] = true
+			for _, name := range commandNames(p.Args) {
+				names[name] = true
 			}
 		}
 		for _, child := range children[pid] {
 			queue = append(queue, child.PID)
+		}
+	}
+	return names
+}
+
+// スクリプトを実行し得る既知のインタプリタ。これらが argv[0] の時だけ、スクリプト引数も
+// プロセス名に数える (Codex の node ラッパー、tmux-issue-watcher のシェル起動を拾うため)
+var scriptInterpreters = map[string]bool{
+	"sh": true, "bash": true, "zsh": true, "dash": true, "fish": true, "ksh": true,
+	"node": true, "deno": true, "bun": true,
+	"python": true, "python2": true, "python3": true,
+	"ruby": true, "perl": true,
+}
+
+// 1 プロセスが名乗る名前。実行ファイル (argv[0]) の basename に加え、argv[0] が既知の
+// インタプリタの時だけ最初の非オプション引数 (スクリプトのパス) の basename も返す。
+// 通常のコマンド引数 (vim /tmp/claude の /tmp/claude 等) を誤って名前に数えないための限定
+func commandNames(argsLine string) []string {
+	fields := strings.Fields(argsLine)
+	if len(fields) == 0 {
+		return nil
+	}
+	// tmux がデフォルトシェルをログインシェルで起動すると argv[0] が -zsh / -bash になる。
+	// 実行ファイルの basename で一致させたいので先頭のログインシェル用 - を落とす
+	exe := strings.TrimPrefix(filepath.Base(fields[0]), "-")
+	names := []string{exe}
+	if scriptInterpreters[exe] {
+		for _, arg := range fields[1:] {
+			if strings.HasPrefix(arg, "-") {
+				continue
+			}
+			names = append(names, filepath.Base(arg))
+			break
 		}
 	}
 	return names

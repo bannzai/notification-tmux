@@ -445,7 +445,7 @@ func (m model) filterLine(matched int) string {
 	if m.filtering {
 		query += "_"
 	}
-	return fmt.Sprintf("filter: %s (%d/%d)", query, matched, len(m.items))
+	return fmt.Sprintf("filter: %s (%d/%d)", query, matched, len(m.allItems()))
 }
 
 // 画面外に続きがある時だけ件数を出す。行数は変えずに空行にして、
