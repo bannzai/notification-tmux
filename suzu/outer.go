@@ -35,9 +35,14 @@ var outerOptions = []struct {
 	// (内側 client は mouse を掴んでいるため wheel/クリックは内側へ転送される)
 	{"mouse", "on"},
 
-	// 内側 tmux からの escape sequence (OSC52 等) を実端末へ透過する
+	// 内側 tmux からの escape sequence (OSC52 等) を実端末へ透過する。
+	// set-clipboard は on にする: external だと tmux は「pane 内のアプリが出す OSC52」を
+	// 無視する (input_osc_52 は state != on で即 return)。外側から見た内側 tmux は
+	// pane 内のアプリなので、内側のコピーで出る OSC52 は external では実端末へ届かない
+	// (verify.sh の 5j で実測)。on にすると外側にも paste buffer が溜まるが、
+	// 外側は buffer を使わないため害は無い
 	{"allow-passthrough", "all"},
-	{"set-clipboard", "external"},
+	{"set-clipboard", "on"},
 
 	// nested での ESC 遅延をなくす
 	{"escape-time", "0"},
@@ -294,12 +299,20 @@ func startFailure(cfg Config, err error) error {
 		"`ps ax | grep \"tmux -L %s\"` で確認して kill してください", err, cfg.OuterSocket)
 }
 
-// 外側 server を額縁として仕立てる (設定 + サイドバー)
-func initializeOuter(cfg Config) error {
+// outerOptions を外側 server へ流し込む
+func applyOuterOptions(cfg Config) error {
 	for _, option := range outerOptions {
 		if err := runTmux(cfg.outerCommand("set-option", "-g", option.name, option.value)); err != nil {
 			return fmt.Errorf("外側の %s 設定に失敗: %w", option.name, err)
 		}
+	}
+	return nil
+}
+
+// 外側 server を額縁として仕立てる (設定 + サイドバー)
+func initializeOuter(cfg Config) error {
+	if err := applyOuterOptions(cfg); err != nil {
+		return err
 	}
 	return openSidebar(cfg)
 }
@@ -354,8 +367,16 @@ func cmdStart(cfg Config) error {
 			}
 			return err
 		}
-	} else if err := restoreInnerPane(cfg); err != nil {
-		return err
+	} else {
+		// 旧版バイナリが構築した外側 server が残ったまま make cli で更新して start した時も、
+		// 設定値を最新へ揃えるために毎回流し込む。set-option -g は同じ値を何度入れても
+		// 状態が変わらない (冪等) ので、既に構築済みの外側へ再適用して差し支えない
+		if err := applyOuterOptions(cfg); err != nil {
+			return err
+		}
+		if err := restoreInnerPane(cfg); err != nil {
+			return err
+		}
 	}
 	installInnerKeys(cfg)
 	installDoorbellHook(cfg)
