@@ -31,7 +31,7 @@ type innerPane struct {
 }
 
 // tmux 出力のフィールド区切り。window 名やコマンド行にはタブが入り得るため、
-// テキストに現れない ASCII Unit Separator を使う (Noroshi/Noroshi/TmuxModels.swift と同じ)
+// テキストに現れない ASCII Unit Separator を使う (削除済みの GUI 版 TmuxModels.swift と同じ規則)
 const fieldSeparator = "\x1f"
 
 // tmux 3.4 は list-* の出力で制御文字を 8 進の可視化表記に変えるため、区切りが

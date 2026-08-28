@@ -2,11 +2,11 @@
 
 ## 機能追加
 
-- ユーザーが操作する機能を追加する時は、キーボードショートカットをセットで用意すること (issue #29)。メニューコマンドの追加先は `Noroshi/Noroshi/NoroshiApp.swift` の `NavigationCommands`。既存ショートカットと衝突しないことを確認する
+- ユーザーが操作する機能を追加する時は、キー操作をセットで用意すること (issue #29)。サイドバーのキー処理は `suzu/model.go` の `updateKey` / `updateFilterKey` で、フッターの案内 (`footerLines`) も合わせて更新する。内側 tmux から呼ぶ操作は `suzu start` が注入する prefix バインド (`suzu/outer.go`) に追加する。既存のキーと衝突しないことを確認する
 
 ## 動作確認
 
-- 変更後は必ず [E2E.md](E2E.md) の手順で動作確認すること。ユニットテスト (`make test`) だけで完了としない
+- 変更後は必ず [E2E.md](E2E.md) の手順で動作確認すること。ユニットテスト (`make test-cli`) だけで完了としない
 
 <!-- ai-review-config begin -->
 <!--

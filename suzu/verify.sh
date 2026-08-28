@@ -108,6 +108,21 @@ wait_for() {
   return 1
 }
 
+# 端末代役 T を height 行で起動し、その pane で command を実行する。
+# kill-server 直後は旧 server が終了処理中で、同じ socket へ繋いだ新しい client が
+# "server exited unexpectedly" で落ちることがある (tmux 3.4 の CI で実測。同じ commit の
+# 前回実行は通っており再現性は無い)。socket の残り方は OS で違う (Linux は server が
+# unlink する・macOS は残る) ため、socket の消失ではなく起動の成否で短く再試行する
+start_terminal_stand_in() {
+  local height="$1" command="$2" i
+  for i in 1 2 3 4 5; do
+    tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y "$height" "$command" 2>/dev/null \
+      && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
 outer_panes() {
   tmux -L "$OUT" list-panes -t suzu:0 2>/dev/null | wc -l | tr -d ' '
 }
@@ -445,8 +460,7 @@ for i in 1 2 3 4 5 6 7 8; do
 done
 # 端末代役を低い高さで作り直す (外側は最後に使われた client のサイズに合わせる)
 tmux -L "$T" kill-server 2>/dev/null
-tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y 18 \
-  "TMUX= tmux -L $OUT attach -t suzu" || fail "低い端末代役の起動"
+start_terminal_stand_in 18 "TMUX= tmux -L $OUT attach -t suzu" || fail "低い端末代役の起動"
 wait_for "[ \"\$(tmux -L $OUT display-message -p -t suzu:0 '#{window_height}' 2>/dev/null || echo 999)\" -le 20 ]" \
   || fail "外側が低い端末サイズに追従しない"
 
@@ -616,7 +630,7 @@ tmux -L "$OUT" kill-server 2>/dev/null
 echo "=== 8. tty から起動した時の attach と二重ネストのガード ==="
 # 非 tty の start は attach しないため、実端末から使う経路 (exec で tmux へ置き換わる) は
 # ここでしか通らない。$TMUX を外した pane 内で起動して再現する
-tmux -L "$T" -f /dev/null new-session -d -s term -x 220 -y 40 \
+start_terminal_stand_in 40 \
   "env -u TMUX SUZU_OUTER_SOCKET='$OUT' SUZU_INNER_TMUX='tmux -L $IN' SUZU_INNER_TMUX_CMD='tmux -L $IN attach -t test1' SUZU_DOORBELL_FILE='$DOORBELL' '$SUZU_BIN' start" \
   || fail "tty 付き start のための端末代役の起動"
 wait_for "[ \"\$(outer_panes)\" = 2 ]" \
