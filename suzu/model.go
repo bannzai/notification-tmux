@@ -18,27 +18,48 @@ const (
 	styleSession  = "\x1b[1m"
 )
 
+// 1 つの host (ローカルは "") から取り直した通知一覧
 type notificationsMsg struct {
+	host  string
 	items []Notification
 	err   error
+	// ssh が繋がらない (host が落ちている・鍵認証で入れない)。リモートだけが取る
+	unreachable bool
 }
 
-type connectionMsg struct{ connected bool }
+type connectionMsg struct {
+	host      string
+	connected bool
+	// control client の ssh が失敗した。connected が false の時だけ意味を持つ
+	unreachable bool
+}
 
 type actionMsg struct{ err error }
 
 // 選択中の通知が出ている pane の見た目。取得中に選択が動いた結果を捨てられるよう
-// どの pane のものかを一緒に運ぶ
+// どの pane のものか (Notification.paneKey) を一緒に運ぶ
 type previewMsg struct {
-	paneID string
-	lines  []string
+	paneKey string
+	lines   []string
+}
+
+// リモート host ごとの最新の取得結果。ローカルは model の items / err / connected が持つ
+type hostState struct {
+	items       []Notification
+	err         error
+	unreachable bool
 }
 
 type model struct {
 	cfg    Config
 	prefix prefixKey
-	// tmux から取得した全通知。画面に出るのは query を適用した visible() の方
-	items  []Notification
+	// 全 host の通知を表示順 (ローカル → remote-host の記述順) に並べたもの。
+	// 画面に出るのは query を適用した visible() の方
+	items []Notification
+	// リモート host ごとの取得結果。items はここと local を合成して作る
+	remote map[string]hostState
+	// ローカル (内側 tmux) の通知
+	local  []Notification
 	cursor int
 	query  string
 	// フィルタ入力モード。printable キーを query へ取り込む
@@ -76,16 +97,32 @@ func (m model) step(msg tea.Msg) (model, tea.Cmd) {
 		m.height = msg.Height
 	case notificationsMsg:
 		selected, _ := m.selected()
-		m.items = msg.items
-		m.err = msg.err
-		m = m.restoreCursor(selected.WindowID)
+		if msg.host == "" {
+			m.local = msg.items
+			m.err = msg.err
+		} else {
+			m = m.updateRemote(msg.host, func(state *hostState) {
+				state.items = msg.items
+				state.err = msg.err
+				state.unreachable = msg.unreachable
+			})
+		}
+		m.items = m.mergeItems()
+		m = m.restoreCursor(selected.key())
 		return m, m.previewCmd()
 	case previewMsg:
-		if msg.paneID == m.selectedPaneID() {
+		if selected, ok := m.selected(); ok && msg.paneKey == selected.paneKey() {
 			m.preview = msg.lines
 		}
 	case connectionMsg:
-		m.connected = msg.connected
+		if msg.host == "" {
+			m.connected = msg.connected
+		} else {
+			m = m.updateRemote(msg.host, func(state *hostState) {
+				// 繋がった時点で未接続を解き、その後の一覧取得の結果で改めて決める
+				state.unreachable = !msg.connected && msg.unreachable
+			})
+		}
 	case actionMsg:
 		m.err = msg.err
 	case tea.KeyMsg:
@@ -96,6 +133,46 @@ func (m model) step(msg tea.Msg) (model, tea.Cmd) {
 
 func (m model) visible() []Notification {
 	return filterNotifications(m.items, m.query)
+}
+
+// model は値で受け渡すため map は共有される。Update は直列に呼ばれるので書き換えてよい
+func (m model) updateRemote(host string, apply func(state *hostState)) model {
+	if m.remote == nil {
+		m.remote = map[string]hostState{}
+	}
+	state := m.remote[host]
+	apply(&state)
+	m.remote[host] = state
+	return m
+}
+
+// ローカル → remote-host の記述順で通知を並べる。host ごとの取得は独立しているため、
+// 1 つの host の更新で他の host の表示が消えない
+func (m model) mergeItems() []Notification {
+	merged := append([]Notification{}, m.local...)
+	for _, host := range m.cfg.RemoteHosts {
+		merged = append(merged, m.remote[host].items...)
+	}
+	return merged
+}
+
+// ヘッダー直下に出す接続状態。ローカルの未接続と、繋がらないリモート host を 1 行ずつ出す。
+// 繋がらない host があっても他の host の一覧は止めない
+func (m model) statusLines() []string {
+	var lines []string
+	if !m.connected {
+		lines = append(lines, "内側 tmux 未接続")
+	}
+	for _, host := range m.cfg.RemoteHosts {
+		state := m.remote[host]
+		switch {
+		case state.unreachable:
+			lines = append(lines, host+": 未接続")
+		case state.err != nil:
+			lines = append(lines, host+": "+state.err.Error())
+		}
+	}
+	return lines
 }
 
 // cursor は visible() の window 行だけを指す。session 見出しは対象外なので
@@ -111,11 +188,11 @@ func (m model) clampCursor() model {
 }
 
 // 再取得で items の並びが変わると整数の cursor は別の window を指してしまう。
-// 更新前に選んでいた window を探し直し、消えていた時だけ位置で丸める
-func (m model) restoreCursor(windowID string) model {
-	if windowID != "" {
+// 更新前に選んでいた window (key) を探し直し、消えていた時だけ位置で丸める
+func (m model) restoreCursor(key string) model {
+	if key != (Notification{}).key() {
 		for index, item := range m.visible() {
-			if item.WindowID == windowID {
+			if item.key() == key {
 				m.cursor = index
 				return m
 			}
@@ -279,12 +356,12 @@ func (m model) toggleCmd() tea.Cmd {
 
 func (m model) previewCmd() tea.Cmd {
 	cfg := m.cfg
-	paneID := m.selectedPaneID()
-	if paneID == "" {
+	selected, ok := m.selected()
+	if !ok || selected.PaneID == "" {
 		return func() tea.Msg { return previewMsg{} }
 	}
 	return func() tea.Msg {
-		return previewMsg{paneID: paneID, lines: fetchPreview(cfg, paneID, previewLineCount)}
+		return previewMsg{paneKey: selected.paneKey(), lines: fetchPreview(cfg, selected, previewLineCount)}
 	}
 }
 
@@ -299,8 +376,8 @@ func (m model) View() string {
 		header = fmt.Sprintf("Noroshi 🔔%d", len(m.items))
 	}
 	writeLine(&b, header, width, "")
-	if !m.connected {
-		writeLine(&b, "内側 tmux 未接続", width, "")
+	for _, line := range m.statusLines() {
+		writeLine(&b, line, width, "")
 	}
 
 	visible := m.visible()

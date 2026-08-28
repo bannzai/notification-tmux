@@ -33,6 +33,13 @@ type Config struct {
 	// 左 pane で実行するコマンド (シェルに渡す 1 行)
 	SidebarCmd   string
 	DoorbellFile string
+	// remote-host を読む設定ファイル (GUI 版と同じ ~/.config/noroshi/config)
+	ConfigFile string
+	// リモート host へ接続する ssh コマンド。検証用に代役へ差し替えられるよう複数語を許す
+	SSHCmd []string
+	// サイドバーが一覧に載せるリモート host (ConfigFile の remote-host、記述順)。
+	// sidebar サブコマンドの起動時に読む
+	RemoteHosts []string
 }
 
 func loadConfig() Config {
@@ -48,6 +55,8 @@ func loadConfig() Config {
 		ToggleKey:    envOr("SUZU_INNER_TOGGLE_KEY", "b"),
 		SidebarWidth: intEnvOr("SUZU_SIDEBAR_WIDTH", defaultWidth),
 		DoorbellFile: doorbellFile(),
+		ConfigFile:   envOr("SUZU_CONFIG_FILE", defaultConfigFile()),
+		SSHCmd:       sshCmd(),
 	}
 	cfg.SidebarCmd = envOr("SUZU_SIDEBAR_CMD", cfg.defaultSidebarCmd())
 	return cfg
@@ -62,7 +71,7 @@ func (c Config) defaultSidebarCmd() string {
 // SidebarCmd / InnerAttach は他の設定から既定値を組み立てるため、Config の値を
 // 無条件に焼き込むと引き継ぐたびに入れ子で肥大する (SUZU_SIDEBAR_CMD の既定値は
 // exportedEnv 自身を含む)。ユーザーが明示した時だけ引き継ぐ
-var explicitOnlyEnv = []string{"SUZU_SIDEBAR_CMD", "SUZU_INNER_TMUX_CMD"}
+var explicitOnlyEnv = []string{"SUZU_SIDEBAR_CMD", "SUZU_INNER_TMUX_CMD", "SUZU_SSH_CMD"}
 
 // 子プロセス (サイドバー・注入したキーバインド) へ引き継ぐ設定。
 // tmux の pane やキーバインドは親の環境を継がないため、コマンド行へ焼き込む
@@ -74,6 +83,7 @@ func (c Config) exportedEnv() string {
 		"SUZU_INNER_TOGGLE_KEY=" + shellQuote(c.ToggleKey),
 		"SUZU_SIDEBAR_WIDTH=" + shellQuote(strconv.Itoa(c.SidebarWidth)),
 		"SUZU_DOORBELL_FILE=" + shellQuote(c.DoorbellFile),
+		"SUZU_CONFIG_FILE=" + shellQuote(c.ConfigFile),
 	}
 	for _, name := range explicitOnlyEnv {
 		if value := os.Getenv(name); value != "" {
@@ -107,6 +117,13 @@ func doorbellFile() string {
 		state = filepath.Join(os.Getenv("HOME"), ".local", "state")
 	}
 	return filepath.Join(state, "suzu", "doorbell")
+}
+
+func sshCmd() []string {
+	if words := strings.Fields(os.Getenv("SUZU_SSH_CMD")); len(words) > 0 {
+		return words
+	}
+	return defaultSSHCmd()
 }
 
 func executablePath() string {

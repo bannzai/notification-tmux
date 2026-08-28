@@ -28,6 +28,16 @@
 //	SUZU_SIDEBAR_WIDTH     サイドバーの幅 (default: 40)
 //	SUZU_DOORBELL_FILE     @claude-waiting の変化をサイドバーへ知らせる touch 先
 //	                       (default: ${XDG_STATE_HOME:-$HOME/.local/state}/suzu/doorbell)
+//	SUZU_CONFIG_FILE       remote-host (リモート host の ssh 接続先。複数行で複数 host) を読む
+//	                       設定ファイル (default: ${XDG_CONFIG_HOME:-$HOME/.config}/noroshi/config)
+//	SUZU_SSH_CMD           リモート host へ接続する ssh コマンド
+//	                       (default: ssh -o BatchMode=yes -o ConnectTimeout=5 -o ControlMaster=auto ...)
+//	                       検証用に "tmux -L <隔離socket>" を実行する代役へ差し替えられる
+//
+// リモート host (remote.go): remote-host の tmux にある @claude-waiting の window も
+// サイドバーへ host 付きで並べ、Enter で内側 tmux にその session への
+// `ssh -t <host> tmux attach` の window を開く。リモート側の Claude Code hook は
+// ローカルと同じ @claude-waiting の set だけでよい (hook・socket の転送は不要)
 package main
 
 import (

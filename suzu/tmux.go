@@ -12,6 +12,8 @@ import (
 // @claude-waiting が set された window 1 件。pane と window の両方に set されるため
 // window 単位に畳んだ後の姿を表す
 type Notification struct {
+	// 通知が出ている tmux server の host。ローカル (内側 tmux) は空
+	Host    string
 	Session string
 	// switch-client の target に使う。tmux は `%` `$` `@` で始まる target を
 	// pane/session/window の ID として解釈するため、その形の session 名は
@@ -22,6 +24,24 @@ type Notification struct {
 	WindowName  string
 	PaneID      string
 	Icon        string
+}
+
+// サイドバーの見出しに出す session の表示名。リモートは host を付けて区別する
+func (n Notification) sessionLabel() string {
+	if n.Host == "" {
+		return n.Session
+	}
+	return n.Host + ":" + n.Session
+}
+
+// window ID は server 内でしか一意でなく host をまたぐと衝突するため、
+// 選択の追跡は host と組にした値で行う
+func (n Notification) key() string {
+	return n.Host + fieldSeparator + n.WindowID
+}
+
+func (n Notification) paneKey() string {
+	return n.Host + fieldSeparator + n.PaneID
 }
 
 // 外側 tmux でサイドバーの隣にいる pane。内側 tmux へ attach している右 pane を指す
@@ -251,6 +271,9 @@ func fetchInnerPane(cfg Config) (innerPane, error) {
 // 通知の window を内側で表示する。フォーカスはサイドバーに残し、右 pane へ移るのは
 // prefix + jump key / q / Esc の明示操作だけにする
 func jump(cfg Config, n Notification) error {
+	if n.Host != "" {
+		return jumpRemote(cfg, n)
+	}
 	pane, err := fetchInnerPane(cfg)
 	if err != nil {
 		return err
@@ -274,8 +297,11 @@ func jump(cfg Config, n Notification) error {
 
 // 選択中の通知が出ている pane の見た目を、カーソル移動と一覧更新の時だけ取りに行く。
 // pane が消えている等で失敗したらプレビューを畳むだけにして、サイドバーは動かし続ける
-func fetchPreview(cfg Config, paneID string, limit int) []string {
-	out, err := output(cfg.innerCommand("capture-pane", "-p", "-t", paneID))
+func fetchPreview(cfg Config, n Notification, limit int) []string {
+	if n.Host != "" {
+		return fetchRemotePreview(cfg, n.Host, n.PaneID, limit)
+	}
+	out, err := output(cfg.innerCommand("capture-pane", "-p", "-t", n.PaneID))
 	if err != nil {
 		return nil
 	}
