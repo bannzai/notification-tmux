@@ -33,6 +33,10 @@ type Config struct {
 	// 左 pane で実行するコマンド (シェルに渡す 1 行)
 	SidebarCmd   string
 	DoorbellFile string
+	// serve (iPhone 向け HTTP/SSE daemon) の待ち受けアドレスと認証トークン。
+	// トークンが空なら serve が起動ごとに生成する
+	ServeAddr  string
+	ServeToken string
 }
 
 func loadConfig() Config {
@@ -48,6 +52,8 @@ func loadConfig() Config {
 		ToggleKey:    envOr("SUZU_INNER_TOGGLE_KEY", "b"),
 		SidebarWidth: intEnvOr("SUZU_SIDEBAR_WIDTH", defaultWidth),
 		DoorbellFile: doorbellFile(),
+		ServeAddr:    envOr("SUZU_SERVE_ADDR", defaultServeAddr),
+		ServeToken:   os.Getenv("SUZU_SERVE_TOKEN"),
 	}
 	cfg.SidebarCmd = envOr("SUZU_SIDEBAR_CMD", cfg.defaultSidebarCmd())
 	return cfg

@@ -28,6 +28,9 @@
 //	SUZU_SIDEBAR_WIDTH     サイドバーの幅 (default: 40)
 //	SUZU_DOORBELL_FILE     @claude-waiting の変化をサイドバーへ知らせる touch 先
 //	                       (default: ${XDG_STATE_HOME:-$HOME/.local/state}/suzu/doorbell)
+//	SUZU_SERVE_ADDR        serve の待ち受けアドレス (default: 127.0.0.1:7788)。
+//	                       iPhone から届かせるには Tailscale の IP を指定する (serve.go)
+//	SUZU_SERVE_TOKEN       serve の認証トークン (default: 起動ごとに生成して URL と一緒に表示)
 package main
 
 import (
@@ -35,7 +38,7 @@ import (
 	"os"
 )
 
-const usage = `usage: suzu {start|stop|toggle|focus|status|sidebar}
+const usage = `usage: suzu {start|stop|toggle|focus|status|sidebar|serve}
 
   start    外側 tmux を構築して attach する (構築済みなら attach のみ = 冪等)。
            内側 tmux にジャンプキー・トグルキーと doorbell hook を注入する
@@ -46,6 +49,8 @@ const usage = `usage: suzu {start|stop|toggle|focus|status|sidebar}
   focus    {sidebar|inner|toggle} フォーカスを移す
   status   外側の状態を表示する
   sidebar  通知サイドバーの TUI (外側の左 pane が実行する内部サブコマンド)
+  serve    通知一覧を HTTP/SSE で配信し、iPhone のブラウザからボタンで
+           tmux コマンド (ジャンプ・定型キー送信) を発行できる daemon を起動する
 `
 
 func main() {
@@ -78,6 +83,8 @@ func run(cfg Config, args []string) error {
 		return cmdStatus(cfg)
 	case "sidebar":
 		return runSidebar(cfg)
+	case "serve":
+		return cmdServe(cfg)
 	default:
 		fmt.Fprint(os.Stderr, usage)
 		os.Exit(64)

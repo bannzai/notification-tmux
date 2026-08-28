@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="suzu">
+<meta name="theme-color" content="#ff5f00">
+<link rel="manifest" href="/manifest.webmanifest">
+<title>suzu</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f6f6f6; --fg: #111; --card: #fff; --muted: #666; --line: #ddd;
+    --accent: #ff5f00; --accent-fg: #fff; --preview-bg: #1e1e1e; --preview-fg: #e6e6e6;
+    --danger: #c62828;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #111; --fg: #eee; --card: #1c1c1c; --muted: #999; --line: #333; --preview-bg: #000; --preview-fg: #ddd; }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+  }
+  header {
+    position: sticky; top: 0; z-index: 1; background: var(--bg);
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 16px; border-bottom: 1px solid var(--line);
+  }
+  header h1 { margin: 0; font-size: 18px; }
+  #status { font-size: 13px; color: var(--muted); }
+  #status.bad { color: var(--danger); }
+  main { padding: 12px; }
+  .empty { text-align: center; color: var(--muted); padding: 48px 0; }
+  .session { margin: 16px 0 8px; font-weight: 600; color: var(--muted); font-size: 14px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+  .title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .title .name { font-weight: 600; font-size: 17px; word-break: break-all; }
+  .title .meta { color: var(--muted); font-size: 13px; }
+  pre.preview {
+    margin: 0 0 10px; padding: 8px; border-radius: 8px; max-height: 40vh; overflow: auto;
+    background: var(--preview-bg); color: var(--preview-fg);
+    font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre; -webkit-overflow-scrolling: touch;
+  }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    appearance: none; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--fg);
+    font: inherit; font-weight: 600; min-height: 44px; min-width: 56px; padding: 0 14px; touch-action: manipulation;
+  }
+  button.jump { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button.armed { background: var(--danger); color: #fff; border-color: var(--danger); }
+  button:disabled { opacity: .5; }
+  #toast {
+    position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
+    background: var(--danger); color: #fff; padding: 12px; border-radius: 10px; display: none; font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1 id="heading">suzu</h1>
+  <div id="status">接続中…</div>
+</header>
+<main id="list"><div class="empty">読み込み中…</div></main>
+<div id="toast"></div>
+<script>
+(() => {
+  // 認証トークンは /?token= で受け取った cookie にある。POST は Authorization ヘッダでしか通らない
+  const token = (document.cookie.match(/(?:^|; )suzu_token=([^;]*)/) || [])[1] || '';
+  const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+  const list = document.getElementById('list');
+  const status = document.getElementById('status');
+  const heading = document.getElementById('heading');
+  const toast = document.getElementById('toast');
+  // 誤タップ対策: キー送信は 1 回目のタップで「武装」し、3 秒以内の 2 回目で送る
+  const ARM_MS = 3000;
+  let armed = null; // { paneId, key, timer }
+  let state = { connected: false, keys: [], items: [] };
+
+  const el = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
+  };
+
+  const showToast = (message) => {
+    toast.textContent = message;
+    toast.style.display = 'block';
+    clearTimeout(showToast.timer);
+    showToast.timer = setTimeout(() => { toast.style.display = 'none'; }, 4000);
+  };
+
+  const disarm = () => {
+    if (armed) { clearTimeout(armed.timer); armed = null; }
+    render();
+  };
+
+  const post = async (body) => {
+    const res = await fetch('/api/actions', { method: 'POST', headers, body: JSON.stringify(body) });
+    if (!res.ok) {
+      let message = res.status + ' ' + res.statusText;
+      try { message = (await res.json()).error || message; } catch (_) {}
+      throw new Error(message);
+    }
+  };
+
+  const onKey = (item, key) => {
+    if (armed && armed.paneId === item.pane_id && armed.key === key) {
+      const chosen = armed;
+      disarm();
+      post({ action: 'send-keys', pane_id: chosen.paneId, key }).catch((e) => showToast('送信失敗: ' + e.message));
+      return;
+    }
+    if (armed) clearTimeout(armed.timer);
+    armed = { paneId: item.pane_id, key, timer: setTimeout(disarm, ARM_MS) };
+    render();
+  };
+
+  const onJump = (item) => {
+    post({ action: 'jump', pane_id: item.pane_id }).catch((e) => showToast('ジャンプ失敗: ' + e.message));
+  };
+
+  const keyLabel = (key) => ({ Enter: '⏎ Enter', Escape: 'Esc' }[key] || key);
+
+  const render = () => {
+    heading.textContent = state.items.length ? `suzu 🔔${state.items.length}` : 'suzu';
+    list.replaceChildren();
+    if (!state.items.length) {
+      list.append(el('div', 'empty', state.error || '通知なし'));
+      return;
+    }
+    let currentSession = null;
+    for (const item of state.items) {
+      if (item.session !== currentSession) {
+        currentSession = item.session;
+        list.append(el('div', 'session', '▸ ' + item.session));
+      }
+      const card = el('div', 'card');
+      const title = el('div', 'title');
+      title.append(el('span', 'name', `${item.icon} ${item.window_name}`));
+      title.append(el('span', 'meta', `${item.window_index} ${item.pane_id}`));
+      card.append(title);
+      if (item.preview && item.preview.length) {
+        const pre = el('pre', 'preview', item.preview.join('\n'));
+        card.append(pre);
+        // 末尾 (新しい出力) が見えるようにスクロールしておく
+        requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+      }
+      const buttons = el('div', 'buttons');
+      const jump = el('button', 'jump', 'ジャンプ');
+      jump.addEventListener('click', () => onJump(item));
+      buttons.append(jump);
+      for (const key of state.keys) {
+        const isArmed = armed && armed.paneId === item.pane_id && armed.key === key;
+        const button = el('button', isArmed ? 'armed' : '', isArmed ? `${keyLabel(key)} を送る?` : keyLabel(key));
+        button.addEventListener('click', () => onKey(item, key));
+        buttons.append(button);
+      }
+      card.append(buttons);
+      list.append(card);
+    }
+  };
+
+  const apply = (next) => {
+    state = next;
+    status.textContent = next.connected ? '内側 tmux 接続中' : '内側 tmux 未接続';
+    status.className = next.connected ? '' : 'bad';
+    render();
+  };
+
+  const refresh = async () => {
+    try {
+      const res = await fetch('/api/notifications', { headers, cache: 'no-store' });
+      if (res.status === 401) { location.replace('/'); return; }
+      apply(await res.json());
+    } catch (e) {
+      status.textContent = '取得失敗';
+      status.className = 'bad';
+    }
+  };
+
+  // 更新は SSE の push で受ける。EventSource はヘッダを付けられないため cookie 認証 (GET のみ) で繋ぐ
+  const connect = () => {
+    const source = new EventSource('/api/events');
+    source.addEventListener('notifications', (event) => apply(JSON.parse(event.data)));
+    source.onerror = () => {
+      status.textContent = '再接続中…';
+      status.className = 'bad';
+    };
+    return source;
+  };
+
+  let source = connect();
+  // iOS はバックグラウンドで接続を落とすため、前面に戻った時に取り直して繋ぎ直す
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    refresh();
+    if (source.readyState === EventSource.CLOSED) source = connect();
+  });
+  refresh();
+})();
+</script>
+</body>
+</html>
