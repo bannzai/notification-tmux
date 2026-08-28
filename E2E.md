@@ -10,11 +10,20 @@ make verify-cli
 
 suzu をビルドして `suzu/verify.sh` を実行する。verify.sh は隔離 socket の tmux だけを使い、普段の tmux (default socket) や `~/.tmux.conf` には触れない。全項目 PASS で exit 0。失敗時は最初の失敗時点の状態 (外側 pane・サイドバー画面・内側 session・hook・キー) を標準出力に dump する。
 
+キー入力の実機経路も、端末エミュレータの代役 (隔離 socket の tmux) の pane へ `send-keys` で書き込む形で verify.sh が再現する。
+
+- コピーモード: `prefix + [` が外側を素通りして内側がコピーモードに入り、選択・コピーした行が内側の paste buffer に入ること
+- OSC52: 内側のコピーで出る OSC52 が外側を透過し、実端末の代役の pane 出力 (`pipe-pane` で捕捉) に選択した行の base64 として現れること
+- マウス: 実端末が送る SGR シーケンス (`CSI < ボタン ; 列 ; 行 M/m`) を書き込み、サイドバーのクリックでフォーカスが左へ、右 pane のクリックで右へ移ること、右 pane のホイールが内側 tmux に届くこと
+
 CI (`.github/workflows/ci-e2e.yml`) でも同じ verify.sh が tmux 3.6a (必須) と 3.4 / Homebrew 最新版 (参考) で走る。
 
 ## 手動確認 (実端末)
 
-verify.sh はキー入力の実機経路 (IME・コピーモード・マウス・OSC52) を対象外にしているため、これらに関係する変更は普段の端末で確認する。
+verify.sh は IME (変換前文字列の描画) を対象外にしているため、日本語入力に関係する変更は普段の端末で確認する。次の 2 点は端末エミュレータ側の実装に依存するため verify.sh の対象外で、必要なら普段の端末で確認する。
+
+- OSC52 を受けた端末が実際にシステムのクリップボードへ書き込むか (verify.sh が確かめるのは OSC52 が端末に届くところまで)
+- 端末がマウス操作を SGR シーケンスとして送るか (verify.sh はシーケンスを直接書き込む)
 
 1. `make cli` で `~/.local/bin/suzu` を更新する。
 2. 新しい端末 (Alacritty 等) を開き `suzu start` を実行する。左にサイドバー、右に普段の tmux が表示される。既に外側が構築済みなら attach だけ行う (冪等)。`suzu status` で外側の状態を確認できる。
@@ -26,10 +35,8 @@ verify.sh はキー入力の実機経路 (IME・コピーモード・マウス�
    tmux set-option -pu @claude-waiting && tmux set-option -wu @claude-waiting
    ```
 
-5. コピーモードが関係する変更では、内側で `prefix + [` に入り、選択・コピーした内容が実端末のクリップボードに入ること (OSC52 の透過) を確認する。
-6. マウスが関係する変更では、サイドバーのクリックでフォーカスが左へ、右 pane のクリックで右へ移ること、右 pane のホイールスクロールが内側 tmux に届くことを確認する。
-7. 日本語入力が関係する変更では、右 pane のシェルで IME の変換前文字列が崩れずに表示されることを確認する。
-8. 確認結果を残す場合は、サイドバー pane の描画をテキストで取得して PR に貼る。
+5. 日本語入力が関係する変更では、右 pane のシェルで IME の変換前文字列が崩れずに表示されることを確認する。
+6. 確認結果を残す場合は、サイドバー pane の描画をテキストで取得して PR に貼る。
 
    ```sh
    tmux -L suzu capture-pane -p -t "$(tmux -L suzu list-panes -t suzu:0 -f '#{@suzu-sidebar}' -F '#{pane_id}' | head -1)"
