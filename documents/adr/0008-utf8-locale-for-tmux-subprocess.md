@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted (GUI 版 Noroshi.app の決定。GUI 版は issue #76 で削除したため、現行の suzu には適用されない。記録として残す)
+Accepted (GUI 版 Noroshi.app で決めた対策だが、suzu にも引き継がれている。`suzu/tmux.go` の `tmuxEnv` が locale 未設定時に `LC_CTYPE=en_US.UTF-8` を補う根拠として本 ADR を参照する)
 
 ## Context
 

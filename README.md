@@ -15,7 +15,7 @@ Claude Code が Stop すると狼煙が上がり、その狼煙が上がった w
 
 - 外側 tmux は prefix を持たずキーを 1 つも掴まない (キーはすべて内側へ素通し)。内側でどれだけ window / session を移動してもサイドバーは動かない
 - 通知の実体は内側 tmux の pane option `@claude-waiting`。Claude Code の hooks が `tmux set-option -p @claude-waiting "🔔..."` を書き、`suzu start` が内側へ注入する `after-set-option` hook が doorbell ファイルを touch する。サイドバーはそれを fsnotify で受けて一覧を再取得し、window の増減などツリーの変化は control mode client のイベントで受ける。定期ポーリングは行わない
-- ジャンプは右 pane の内側 client だけを `switch-client` / `select-window` する。普段の端末から内側へ attach している他の client には触れない
+- ジャンプは対象 session の current window を `select-window` で切り替え、右 pane の内側 client だけを `switch-client` でその session へ移す。普段の端末から内側へ attach している他の client の session は切り替えない (同じ session を見ている client からは current window の変更が見える)
 - 既存ツールとの比較・アーキテクチャの選定は issue #67 を参照
 
 ## 必要なもの
