@@ -55,6 +55,13 @@ shell = { program = "/bin/zsh", args = ["-l", "-c", "~/.local/bin/suzu start; ex
 
 detach で外側から戻ると後続の `exec zsh -l` が通常シェルになり、suzu 未インストール時もエラー表示の後シェルに落ちる。
 
+右 pane の接続コマンドの既定値は `tmux attach` のため、内側 tmux に session が 1 つも無い状態 (再起動直後など) では右 pane が即座に終了して左右構成にならない。端末起動用の設定では、session が無ければ作る接続コマンドを `SUZU_INNER_TMUX_CMD` で指定するか、先に内側 session を作っておく。
+
+```toml
+[terminal]
+shell = { program = "/bin/zsh", args = ["-l", "-c", "SUZU_INNER_TMUX_CMD='tmux new-session -A -s main' ~/.local/bin/suzu start; exec zsh -l"] }
+```
+
 ### キー操作
 
 内側 tmux (フォーカスが右) から:
@@ -80,18 +87,37 @@ prefix は内側 tmux の `prefix` オプションを写し取る (`None` や `F
 
 ### Claude Code hooks 連携
 
-suzu 自体は hook スクリプトを持たない。通知の表示・解除は `~/.claude/settings.json` の hooks から内側 tmux の pane option `@claude-waiting` を set / unset することで行う。
+suzu 自体は hook スクリプトを持たない。通知の表示・解除は `~/.claude/settings.json` の hooks から内側 tmux の pane option `@claude-waiting` を set / unset することで行う。`Stop` で set し、`UserPromptSubmit` で unset する最小構成:
 
 ```json
 {
-  "type": "command",
-  "command": "bash -c '[ -n \"$TMUX\" ] && tmux set-option -p @claude-waiting \"🔔$(date +%H:%M)\" && tmux set-option -w @claude-waiting \"🔔$(date +%H:%M)\" || true'"
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '[ -n \"$TMUX\" ] && tmux set-option -p @claude-waiting \"🔔$(date +%H:%M)\" && tmux set-option -w @claude-waiting \"🔔$(date +%H:%M)\" || true'"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -c '[ -n \"$TMUX\" ] && tmux set-option -pu @claude-waiting && tmux set-option -wu @claude-waiting || true'"
+          }
+        ]
+      }
+    ]
+  }
 }
 ```
 
-- 値 (上の例では `🔔HH:MM`) がそのままサイドバーの window 行に表示される。Stop / Notification / PermissionRequest など、イベントごとに別の絵文字を使うと見分けやすい
+- 値 (上の例では `🔔HH:MM`) がそのままサイドバーの window 行に表示される。Notification / PermissionRequest など他のイベントにも同じ形で足し、イベントごとに別の絵文字を使うと見分けやすい
 - `-p` (pane) と `-w` (window) の両方に set する。suzu は pane ローカルに値を持つ pane を通知元として扱い、window option は同じ window の他の pane へ継承されるため status line 等の表示にも使える
-- 応答を返した時 (UserPromptSubmit 等) は `tmux set-option -pu @claude-waiting && tmux set-option -wu @claude-waiting` で解除する
 - tmux 外で走る Claude Code では `$TMUX` が空のため何もしない
 
 ### 環境変数
@@ -125,6 +151,6 @@ make clean        # ビルド成果物を消す
 
 ```
 suzu/              # Go 実装 (各ファイル先頭のコメントが役割を説明する) と E2E の verify.sh
-documents/adr/     # 設計判断の記録 (GUI 版 Noroshi.app の決定。suzu には適用されない)
+documents/adr/     # 設計判断の記録 (主に GUI 版 Noroshi.app の決定。0008 / 0009 は suzu にも引き継がれている。各 ADR の Status 参照)
 docs/knowledge.md  # v1 (NTMUX) 開発時の tmux 連携の知見
 ```
