@@ -18,16 +18,22 @@ const (
 	controlLineLimit = 1 << 20
 )
 
-// 内側 tmux の変化を push で受け取り、デバウンスして通知一覧の再取得を UI へ送る。
+// 再取得の結果 (notificationsMsg / connectionMsg) の届け先。サイドバーでは bubbletea の
+// Program、serve では HTTP/SSE の server が受ける
+type msgSink interface {
+	Send(msg tea.Msg)
+}
+
+// 内側 tmux の変化を push で受け取り、デバウンスして通知一覧の再取得を sink へ送る。
 // 定期ポーリングは行わない
 type watcher struct {
 	cfg      Config
-	program  *tea.Program
+	sink     msgSink
 	triggers chan struct{}
 }
 
-func newWatcher(cfg Config, program *tea.Program) *watcher {
-	return &watcher{cfg: cfg, program: program, triggers: make(chan struct{}, 1)}
+func newWatcher(cfg Config, sink msgSink) *watcher {
+	return &watcher{cfg: cfg, sink: sink, triggers: make(chan struct{}, 1)}
 }
 
 func (w *watcher) run() {
@@ -60,7 +66,7 @@ func (w *watcher) debounce() {
 			armed = true
 		case <-timer.C:
 			armed = false
-			w.program.Send(fetchNotifications(w.cfg))
+			w.sink.Send(fetchNotifications(w.cfg))
 		}
 	}
 }
@@ -102,7 +108,7 @@ func (w *watcher) watchDoorbell() {
 func (w *watcher) watchControlMode() {
 	for {
 		w.readControlMode()
-		w.program.Send(connectionMsg{connected: false})
+		w.sink.Send(connectionMsg{connected: false})
 		time.Sleep(reconnectDelay)
 	}
 }
@@ -128,7 +134,7 @@ func (w *watcher) readControlMode() {
 		return
 	}
 	stdinR.Close()
-	w.program.Send(connectionMsg{connected: true})
+	w.sink.Send(connectionMsg{connected: true})
 	// 切断中に起きた変化はイベントとして再送されないため、接続が成立した時点で
 	// 一覧を取り直す。初回 fetch が内側 server の起動と競合して失敗した場合もここで埋まる
 	w.trigger()
