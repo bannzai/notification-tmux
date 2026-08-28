@@ -11,7 +11,7 @@ func TestParseDoorbellHookTargetsPicksOwnEntriesOnly(t *testing.T) {
 after-set-option[1] run-shell -b "touch '/home/me/.local/state/suzu/doorbell'"
 after-set-option[2] run-shell -b "notify-send changed"
 `
-	targets := parseDoorbellHookTargets(out, "/home/me/.local/state/suzu/doorbell")
+	targets := parseDoorbellHookTargets(out, "after-set-option", "/home/me/.local/state/suzu/doorbell")
 	if len(targets) != 1 || targets[0] != "after-set-option[1]" {
 		t.Fatalf("自分の hook だけを拾えていない: %q", targets)
 	}
@@ -20,7 +20,7 @@ after-set-option[2] run-shell -b "notify-send changed"
 func TestParseDoorbellHookTargetsAcceptsUnindexedEntry(t *testing.T) {
 	// 添字を付けずに単独エントリを出す tmux 版でも解除できること
 	out := "after-set-option run-shell -b \"touch '/tmp/doorbell'\"\n"
-	targets := parseDoorbellHookTargets(out, "/tmp/doorbell")
+	targets := parseDoorbellHookTargets(out, "after-set-option", "/tmp/doorbell")
 	if len(targets) != 1 || targets[0] != "after-set-option" {
 		t.Fatalf("添字なしのエントリを拾えていない: %q", targets)
 	}
@@ -28,10 +28,10 @@ func TestParseDoorbellHookTargetsAcceptsUnindexedEntry(t *testing.T) {
 
 func TestParseDoorbellHookTargetsIgnoresUnsetHook(t *testing.T) {
 	// 未設定の hook は名前だけの行として出る
-	if targets := parseDoorbellHookTargets("after-set-option\n", "/tmp/doorbell"); targets != nil {
+	if targets := parseDoorbellHookTargets("after-set-option\n", "after-set-option", "/tmp/doorbell"); targets != nil {
 		t.Fatalf("未設定の hook を自分のものとして拾った: %q", targets)
 	}
-	if targets := parseDoorbellHookTargets("", "/tmp/doorbell"); targets != nil {
+	if targets := parseDoorbellHookTargets("", "after-set-option", "/tmp/doorbell"); targets != nil {
 		t.Fatalf("空出力で hook が生えた: %q", targets)
 	}
 }
@@ -39,7 +39,7 @@ func TestParseDoorbellHookTargetsIgnoresUnsetHook(t *testing.T) {
 func TestParseDoorbellHookTargetsMatchesOnlyOwnDoorbellFile(t *testing.T) {
 	// 別の suzu (別 socket・別 doorbell) の hook には触らない
 	out := "after-set-option[0] run-shell -b \"touch '/tmp/other/doorbell'\"\n"
-	if targets := parseDoorbellHookTargets(out, "/tmp/mine/doorbell"); targets != nil {
+	if targets := parseDoorbellHookTargets(out, "after-set-option", "/tmp/mine/doorbell"); targets != nil {
 		t.Fatalf("別の doorbell の hook を拾った: %q", targets)
 	}
 }

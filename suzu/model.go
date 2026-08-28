@@ -16,11 +16,20 @@ const (
 	styleReset    = "\x1b[0m"
 	styleSelected = "\x1b[7m"
 	styleSession  = "\x1b[1m"
+	styleSection  = "\x1b[1;4m"
 )
 
 type notificationsMsg struct {
 	items []Notification
 	err   error
+}
+
+// セクション (プロセス別の pane 一覧) の再取得結果。通知の再取得と別メッセージにするのは、
+// セクションが ps でマシン全体のプロセスを走査するため遅く、これを通知の再取得に混ぜると
+// @claude-waiting の更新 (list-panes だけで速い) まで巻き添えで遅れるため (watcher.go 参照)
+type sectionsMsg struct {
+	sections []paneSection
+	err      error
 }
 
 type connectionMsg struct{ connected bool }
@@ -38,9 +47,13 @@ type model struct {
 	cfg    Config
 	prefix prefixKey
 	// tmux から取得した全通知。画面に出るのは query を適用した visible() の方
-	items  []Notification
-	cursor int
-	query  string
+	items []Notification
+	// 通知の下に並ぶプロセス別のセクション (Claude / Codex / 設定ファイルの section)
+	sections []paneSection
+	// セクション取得 (list-panes / ps) の失敗。表示中のセクションは保持したまま原因を出す
+	sectionErr error
+	cursor     int
+	query      string
 	// フィルタ入力モード。printable キーを query へ取り込む
 	filtering bool
 	preview   []string
@@ -75,11 +88,32 @@ func (m model) step(msg tea.Msg) (model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case notificationsMsg:
-		selected, _ := m.selected()
+		// 一覧が同じなら items は入れ替えない (無駄な cursor 復元を避ける)。ただし選択中 pane の
+		// 中身は一覧が変わらなくても更新され得るため、プレビューの取り直しだけは必ず行う
+		if sameItems(m.items, msg.items) && sameErr(m.err, msg.err) {
+			return m, m.previewCmd()
+		}
+		key := m.selectedKey()
 		m.items = msg.items
 		m.err = msg.err
-		m = m.restoreCursor(selected.WindowID)
-		return m, m.previewCmd()
+		return m.restoreCursor(key), m.previewCmd()
+	case sectionsMsg:
+		// 取得に失敗した時は表示中のセクションを消さず保持し、原因だけ差し替える。
+		// 失敗で全セクションが黙って消えるのを防ぐ
+		if msg.err != nil {
+			if sameErr(m.sectionErr, msg.err) {
+				return m, m.previewCmd()
+			}
+			m.sectionErr = msg.err
+			return m, m.previewCmd()
+		}
+		if m.sectionErr == nil && m.sameSections(msg.sections) {
+			return m, m.previewCmd()
+		}
+		key := m.selectedKey()
+		m.sections = msg.sections
+		m.sectionErr = nil
+		return m.restoreCursor(key), m.previewCmd()
 	case previewMsg:
 		if msg.paneID == m.selectedPaneID() {
 			m.preview = msg.lines
@@ -94,8 +128,71 @@ func (m model) step(msg tea.Msg) (model, tea.Cmd) {
 	return m, nil
 }
 
+// 通知 → 各セクションの順に並べた全行 (フィルタ前)
+func (m model) allItems() []Notification {
+	all := append([]Notification{}, m.items...)
+	for _, section := range m.sections {
+		all = append(all, section.Items...)
+	}
+	return all
+}
+
+// 選択中の行の識別子 (無選択なら空)。再取得で並びが変わっても同じ行へ戻すために使う
+func (m model) selectedKey() string {
+	if selected, ok := m.selected(); ok {
+		return selected.key()
+	}
+	return ""
+}
+
+// セクションの並びが今と同じか。見出しと配下の行 (表示に出る全フィールド) を見る
+func (m model) sameSections(sections []paneSection) bool {
+	if len(m.sections) != len(sections) {
+		return false
+	}
+	for i := range m.sections {
+		if m.sections[i].Title != sections[i].Title || !sameItems(m.sections[i].Items, sections[i].Items) {
+			return false
+		}
+	}
+	return true
+}
+
+// error の有無・文面が同じか
+func sameErr(a, b error) bool {
+	if (a == nil) != (b == nil) {
+		return false
+	}
+	return a == nil || a.Error() == b.Error()
+}
+
+// 通知 (Notification) の並びが同じか。表示に出る全フィールドを比較する
+func sameItems(a, b []Notification) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// 画面に並ぶ順そのままの選択対象行。cursor / selected() はこの並びの添字を指すため、
+// listRows の itemIndex と一致していなければならない。listRows は section → session の順に
+// 並べ替える (splitBySection → groupBySession) ので、visible() も同じ並べ替えを通す。
+// これを怠ると、同名タイトルのセクションが複数 session にまたがった時に、表示上の行と
+// cursor の指す行がずれ、選んだ行と別の行へジャンプ・プレビューする
 func (m model) visible() []Notification {
-	return filterNotifications(m.items, m.query)
+	filtered := filterNotifications(m.allItems(), m.query)
+	var ordered []Notification
+	for _, section := range splitBySection(filtered) {
+		for _, group := range groupBySession(section.Items) {
+			ordered = append(ordered, group.Items...)
+		}
+	}
+	return ordered
 }
 
 // cursor は visible() の window 行だけを指す。session 見出しは対象外なので
@@ -110,12 +207,12 @@ func (m model) clampCursor() model {
 	return m
 }
 
-// 再取得で items の並びが変わると整数の cursor は別の window を指してしまう。
-// 更新前に選んでいた window を探し直し、消えていた時だけ位置で丸める
-func (m model) restoreCursor(windowID string) model {
-	if windowID != "" {
+// 再取得で items の並びが変わると整数の cursor は別の行を指してしまう。
+// 更新前に選んでいた行 (key) を探し直し、消えていた時だけ位置で丸める
+func (m model) restoreCursor(key string) model {
+	if key != "" {
 		for index, item := range m.visible() {
-			if item.WindowID == windowID {
+			if item.key() == key {
 				m.cursor = index
 				return m
 			}
@@ -356,6 +453,9 @@ func (m model) View() string {
 	if m.err != nil {
 		writeLine(&b, m.err.Error(), width, "")
 	}
+	if m.sectionErr != nil {
+		writeLine(&b, m.sectionErr.Error(), width, "")
+	}
 	// 末尾の改行を残すと bubbletea が空行 1 行として数え、pane が埋まっている時に
 	// 先頭のヘッダーが押し出される
 	lines := strings.Split(strings.TrimRight(b.String(), "\n"), "\n")
@@ -373,7 +473,7 @@ func (m model) filterLine(matched int) string {
 	if m.filtering {
 		query += "_"
 	}
-	return fmt.Sprintf("filter: %s (%d/%d)", query, matched, len(m.items))
+	return fmt.Sprintf("filter: %s (%d/%d)", query, matched, len(m.allItems()))
 }
 
 // 画面外に続きがある時だけ件数を出す。行数は変えずに空行にして、
