@@ -142,7 +142,7 @@ func (c Config) defaultSidebarCmd() string {
 // SidebarCmd / InnerAttach は他の設定から既定値を組み立てるため、Config の値を
 // 無条件に焼き込むと引き継ぐたびに入れ子で肥大する (SUZU_SIDEBAR_CMD の既定値は
 // exportedEnv 自身を含む)。ユーザーが明示した時だけ引き継ぐ
-var explicitOnlyEnv = []string{"SUZU_SIDEBAR_CMD", "SUZU_INNER_TMUX_CMD", "SUZU_CONFIG_FILE"}
+var explicitOnlyEnv = []string{"SUZU_SIDEBAR_CMD", "SUZU_INNER_TMUX_CMD"}
 
 // 子プロセス (サイドバー・注入したキーバインド) へ引き継ぐ設定。
 // tmux の pane やキーバインドは親の環境を継がないため、コマンド行へ焼き込む
@@ -154,6 +154,9 @@ func (c Config) exportedEnv() string {
 		"SUZU_INNER_TOGGLE_KEY=" + shellQuote(c.ToggleKey),
 		"SUZU_SIDEBAR_WIDTH=" + shellQuote(strconv.Itoa(c.SidebarWidth)),
 		"SUZU_DOORBELL_FILE=" + shellQuote(c.DoorbellFile),
+		// 解決済みの設定ファイルパスを焼き込む: 焼き込まないと、環境変数の異なる別プロセスから
+		// サイドバーを開き直した時に子が別の既定パスを再計算して section 設定を読み落とす
+		"SUZU_CONFIG_FILE=" + shellQuote(c.ConfigFile),
 		"SUZU_SCRAPE_INTERVAL=" + shellQuote(strconv.Itoa(int(c.ScrapeInterval/time.Second))),
 	}
 	for _, name := range explicitOnlyEnv {

@@ -85,10 +85,10 @@ func (m model) step(msg tea.Msg) (model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case notificationsMsg:
-		// 変化が無ければ再描画しない: イベントごと・低頻度スクレイプごとの無駄な再描画を避け、
-		// その再描画に重なったキー入力の取りこぼしも防ぐ
+		// 一覧が同じなら items は入れ替えない (無駄な cursor 復元を避ける)。ただし選択中 pane の
+		// 中身は一覧が変わらなくても更新され得るため、プレビューの取り直しだけは必ず行う
 		if sameItems(m.items, msg.items) && sameErr(m.err, msg.err) {
-			return m, nil
+			return m, m.previewCmd()
 		}
 		key := m.selectedKey()
 		m.items = msg.items
@@ -96,7 +96,7 @@ func (m model) step(msg tea.Msg) (model, tea.Cmd) {
 		return m.restoreCursor(key), m.previewCmd()
 	case sectionsMsg:
 		if m.sameSections(msg.sections) {
-			return m, nil
+			return m, m.previewCmd()
 		}
 		key := m.selectedKey()
 		m.sections = msg.sections

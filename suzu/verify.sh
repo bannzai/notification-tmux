@@ -52,7 +52,6 @@ dump_state() {
   tmux -L "$IN" list-clients -F '#{client_name} control=#{client_control_mode} tty=#{client_tty}' 2>&1
   echo "[inner hooks/keys]"
   tmux -L "$IN" show-hooks -g after-set-option 2>&1
-  tmux -L "$IN" show-hooks -g pane-title-changed 2>&1
   tmux -L "$IN" list-keys -T prefix 2>&1 | grep -E "^bind-key +(-r +)?-T +prefix +(N|b|Z) "
   # suzu が使う format の区切り (US, 0x1f) と pane option の読み出しが、この tmux 版で
   # 素通しされるかを見る。旧版で _ に置き換わる等の差があればここで分かる
@@ -175,10 +174,6 @@ doorbell_hook_count() {
   tmux -L "$IN" show-hooks -g after-set-option 2>/dev/null | grep -cF -- "$DOORBELL"
 }
 
-title_hook_count() {
-  tmux -L "$IN" show-hooks -g pane-title-changed 2>/dev/null | grep -cF -- "$DOORBELL"
-}
-
 inner_hook_installed() {
   [ "$(doorbell_hook_count)" -ge 1 ]
 }
@@ -266,15 +261,6 @@ inner_key_installed N && pass "内側に prefix+N のジャンプキーが注入
 inner_key_installed b && pass "内側に prefix+b の toggle キーが注入されている" || fail "toggle キーの注入"
 inner_hook_installed \
   && pass "内側に after-set-option hook が注入されている" || fail "after-set-option hook の注入"
-[ "$(title_hook_count)" -ge 1 ] \
-  && pass "内側に pane-title-changed hook が注入されている" || fail "pane-title-changed hook の注入"
-
-# pane のタイトル変更 (シェルのプロンプトや Claude Code が行う) が doorbell を鳴らすこと
-MARK="$DOORBELL_DIR/mark"
-touch "$MARK"
-tmux -L "$IN" select-pane -t test2:0.0 -T HOOK_TITLE_MARKER
-wait_for "[ \"$DOORBELL\" -nt \"$MARK\" ]" \
-  && pass "pane のタイトル変更で doorbell が鳴る" || fail "pane-title-changed hook が doorbell を鳴らさない"
 
 sidebar_shows 'Noroshi' && pass "サイドバーが描画される" || fail "サイドバーが描画されない"
 sidebar_shows '通知なし' && pass "通知が無い時は「通知なし」" || fail "「通知なし」が描画されない"
@@ -589,6 +575,25 @@ sidebar_hides 'filter:' || fail "5j のフィルタ解除"
 tmux -L "$T" send-keys -t term:0.0 q
 wait_for "! active_pane_is_sidebar" || fail "5j 後のフォーカス復帰"
 
+# セクションで検出した pane が window の非アクティブ pane にいても、ジャンプでその pane を選ぶ。
+# split-window (-d なし) は新 pane をアクティブにするため、fake-claude 側が非アクティブになる
+tmux -L "$IN" split-window -t "$FAKE_CLAUDE" 'echo OTHER_PANE; exec sh' || fail "分割 pane の作成"
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+wait_for "[ \"\$(client_session_of_tty $INNER_TTY)\" = test1 ]" || fail "select-pane 検証のための client 復帰"
+# fake-claude が非アクティブなことを確かめてからジャンプ
+[ "$(tmux -L "$IN" display-message -p -t "$FAKE_CLAUDE" '#{pane_active}')" = 0 ] \
+  && pass "検証の前提: 検出 pane は非アクティブ" || fail "検出 pane が非アクティブにならない"
+tmux -L "$T" send-keys -t term:0.0 C-b N; wait_for "active_pane_is_sidebar" || fail "select-pane 検証のためのフォーカス移動"
+tmux -L "$T" send-keys -l -t term:0.0 '/'; tmux -L "$T" send-keys -l -t term:0.0 'fake-claude'
+sidebar_shows 'filter: fake-claude' || fail "fake-claude で絞り込めない"
+tmux -L "$T" send-keys -t term:0.0 Enter; tmux -L "$T" send-keys -t term:0.0 Enter
+# ジャンプ後、検出 pane (非アクティブだった fake-claude) がアクティブになっていること
+wait_for "[ \"\$(tmux -L $IN display-message -p -t $FAKE_CLAUDE '#{pane_active}')\" = 1 ]" \
+  && pass "セクションのジャンプは検出 pane を select-pane する" || fail "ジャンプで検出 pane が選択されない"
+tmux -L "$T" send-keys -t term:0.0 Escape; sidebar_hides 'filter:' || fail "select-pane 検証後のフィルタ解除"
+tmux -L "$T" send-keys -t term:0.0 q; wait_for "! active_pane_is_sidebar" || fail "select-pane 検証後のフォーカス復帰"
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+
 # 代役が終わって pane が消えれば、window の close イベントでセクションも消える
 tmux -L "$IN" send-keys -t "$FAKE_CLAUDE" Enter
 sidebar_hides '-- Claude' \
@@ -689,8 +694,6 @@ inner_key_installed b \
   && fail "stop 後も toggle キーが残っている" || pass "stop で toggle キー (prefix+b) が解除された"
 [ "$(doorbell_hook_count)" = 0 ] \
   && pass "stop で doorbell hook が解除された" || fail "stop 後も doorbell hook が残っている"
-[ "$(title_hook_count)" = 0 ] \
-  && pass "stop で pane-title-changed hook が解除された" || fail "stop 後も pane-title-changed hook が残っている"
 tmux -L "$IN" list-keys -T prefix 2>/dev/null | grep -E "^bind-key +(-r +)?-T +prefix +Z " | grep -q USER_BIND_MARKER \
   && pass "ユーザー自身の bind は残る" || fail "ユーザー自身の bind まで消した"
 tmux -L "$IN" show-hooks -g after-set-option 2>/dev/null | grep -q USER_HOOK_MARKER \

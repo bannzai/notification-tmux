@@ -187,13 +187,13 @@ func findPrefixKeyBinding(listKeysOutput string, key string) string {
 	return ""
 }
 
-// doorbell ファイルを touch する global hook。
-//   - after-set-option: どこかで set-option された (= @claude-waiting の変化)。control mode の
-//     購読は attach 中 session の pane に限られるため、別 session の通知はこの hook が担う
-//   - pane-title-changed: pane のタイトルが変わった。シェルのプロンプトや Claude Code は
-//     コマンドの開始・終了でタイトルを更新するため、pane 内のプロセスの入れ替わりを
-//     時間駆動の見直し (watcher.go) を待たずに拾える
-var doorbellHooks = []string{"after-set-option", "pane-title-changed"}
+// doorbell ファイルを touch する global hook。after-set-option = どこかで set-option された
+// (= @claude-waiting の変化)。control mode の購読は attach 中 session の pane に限られるため、
+// 別 session の通知はこの hook が担う。
+// pane-title-changed のような高頻度で発火し得るイベントは足さない: doorbell は通知の再取得も
+// 促すため、100ms 未満で発火し続けると debounce が毎回リセットされ通知の反映が飢餓する。
+// pane 内のプロセスの入れ替わりはセクション専用の時間駆動の見直し (watcher.go) で拾う
+var doorbellHooks = []string{"after-set-option"}
 
 // 内側 tmux へ doorbell hook を注入する (メモリ上のみ・冪等)。
 // hook 内で set-option すると再帰発火するため touch しか行わない。

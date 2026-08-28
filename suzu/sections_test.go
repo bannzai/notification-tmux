@@ -246,3 +246,39 @@ func TestLoadSectionRulesWithoutFile(t *testing.T) {
 		t.Fatalf("設定ファイルが無いのにセクションが生えた: %+v", rules)
 	}
 }
+
+func TestProcessNamesStripsLoginShellDash(t *testing.T) {
+	// tmux がデフォルトシェルをログインシェルで起動すると argv[0] が -zsh になる。
+	// section = Shells:zsh が pane のルートシェルに一致すること
+	rules := []sectionRule{{Title: "Shells", Process: "zsh"}}
+	panes := parsePanes(tmuxLine("work", "$0", "@1", "0", "shell", "%9", "900"))
+	processes := parseProcesses(psLine("900", "1", "-zsh"))
+	sections := matchSections(rules, panes, processes)
+	if len(sections) != 1 || paneIDs(sections[0]) != "%9" {
+		t.Fatalf("ログインシェル (-zsh) が zsh に一致しない: %+v", sections)
+	}
+}
+
+func TestMatchSectionsCarriesAgentFromRuleNotTitle(t *testing.T) {
+	// 組み込み Claude (Agent) と同名タイトルの汎用セクション (Agent でない) を並べても、
+	// Agent 属性は各 rule から引き継がれ、タイトルの一致で汎用側まで Agent 扱いにしない
+	rules := []sectionRule{
+		{Title: "Claude", Process: "claude", Agent: true},
+		{Title: "Claude", Process: "my-wrapper", Agent: false},
+	}
+	panes := parsePanes(
+		tmuxLine("work", "$0", "@1", "0", "real", "%1", "100") +
+			tmuxLine("work", "$0", "@2", "1", "wrapped", "%2", "700"),
+	)
+	processes := parseProcesses(psLine("100", "1", "claude") + psLine("700", "1", "/usr/bin/my-wrapper"))
+	sections := matchSections(rules, panes, processes)
+	if len(sections) != 2 {
+		t.Fatalf("同名タイトルのセクションが畳まれた: %+v", sections)
+	}
+	if !sections[0].Agent || paneIDs(sections[0]) != "%1" {
+		t.Errorf("組み込み Claude が Agent でない: %+v", sections[0])
+	}
+	if sections[1].Agent || paneIDs(sections[1]) != "%2" {
+		t.Errorf("同名の汎用セクションが Agent 扱いになっている: %+v", sections[1])
+	}
+}

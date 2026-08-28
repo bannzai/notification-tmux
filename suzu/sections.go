@@ -13,6 +13,10 @@ import (
 // hook を仕込んでいない Codex CLI や hook が落ちた pane も一覧に出る
 type paneSection struct {
 	Title string
+	// このセクションが Claude Code / Codex CLI か。画面から 実行中/入力待ち を判定する対象。
+	// タイトルではなく生成元の sectionRule から引き継ぐ: 設定ファイルで組み込みと同名タイトルの
+	// 汎用セクション (section = Claude:my-wrapper) を足しても、そちらを Agent 扱いにしないため
+	Agent bool
 	Items []Notification
 }
 
@@ -135,6 +139,7 @@ func matchSections(rules []sectionRule, panes []pane, processes []process) []pan
 	sections := make([]paneSection, len(rules))
 	for i, rule := range rules {
 		sections[i].Title = rule.Title
+		sections[i].Agent = rule.Agent
 	}
 	for _, pane := range panes {
 		names := processNames(pane.PID, byPID, children)
@@ -173,7 +178,9 @@ func processNames(root int, byPID map[int]process, children map[int][]process) m
 		visited[pid] = true
 		if p, ok := byPID[pid]; ok {
 			for _, word := range strings.Fields(p.Args) {
-				names[filepath.Base(word)] = true
+				// tmux がデフォルトシェルをログインシェルで起動すると argv[0] が -zsh / -bash に
+				// なる。実行ファイルの basename で一致させたいので先頭のログインシェル用 - を落とす
+				names[strings.TrimPrefix(filepath.Base(word), "-")] = true
 			}
 		}
 		for _, child := range children[pid] {
@@ -186,16 +193,10 @@ func processNames(root int, byPID map[int]process, children map[int][]process) m
 // Agent セクションの pane の画面を 1 回の tmux 呼び出しでまとめて取り、
 // 実行中 / 入力待ち のアイコンを付ける
 func applyAgentStates(cfg Config, sections []paneSection) {
-	agent := map[string]bool{}
-	for _, rule := range cfg.Sections {
-		if rule.Agent {
-			agent[rule.Title] = true
-		}
-	}
 	var paneIDs []string
 	seen := map[string]bool{}
 	for _, section := range sections {
-		if !agent[section.Title] {
+		if !section.Agent {
 			continue
 		}
 		for _, item := range section.Items {
@@ -213,7 +214,7 @@ func applyAgentStates(cfg Config, sections []paneSection) {
 	out, _ := output(cfg.innerCommand(captureArgs(paneIDs)...))
 	captures := parseCaptures(out)
 	for _, section := range sections {
-		if !agent[section.Title] {
+		if !section.Agent {
 			continue
 		}
 		for i := range section.Items {

@@ -264,8 +264,10 @@ func fetchInnerPane(cfg Config) (innerPane, error) {
 	return pane, nil
 }
 
-// 通知の window を内側で表示する。フォーカスはサイドバーに残し、右 pane へ移るのは
-// prefix + jump key / q / Esc の明示操作だけにする
+// 通知・セクションの pane を内側で表示する。フォーカスはサイドバーに残し、右 pane へ移るのは
+// prefix + jump key / q / Esc の明示操作だけにする。
+// select-window だけでなく select-pane も行う: セクションで検出した Claude/Codex が
+// window の非アクティブ pane にいる場合、window を開くだけではその pane に届かない
 func jump(cfg Config, n Notification) error {
 	pane, err := fetchInnerPane(cfg)
 	if err != nil {
@@ -273,6 +275,9 @@ func jump(cfg Config, n Notification) error {
 	}
 	if err := runTmux(cfg.innerCommand("select-window", "-t", n.WindowID)); err != nil {
 		return fmt.Errorf("select-window に失敗: %w", err)
+	}
+	if err := runTmux(cfg.innerCommand("select-pane", "-t", n.PaneID)); err != nil {
+		return fmt.Errorf("select-pane に失敗: %w", err)
 	}
 	out, err := output(cfg.innerCommand("list-clients", "-F", clientFormat))
 	if err != nil {
