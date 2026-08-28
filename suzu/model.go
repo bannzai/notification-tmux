@@ -179,8 +179,20 @@ func sameItems(a, b []Notification) bool {
 	return true
 }
 
+// 画面に並ぶ順そのままの選択対象行。cursor / selected() はこの並びの添字を指すため、
+// listRows の itemIndex と一致していなければならない。listRows は section → session の順に
+// 並べ替える (splitBySection → groupBySession) ので、visible() も同じ並べ替えを通す。
+// これを怠ると、同名タイトルのセクションが複数 session にまたがった時に、表示上の行と
+// cursor の指す行がずれ、選んだ行と別の行へジャンプ・プレビューする
 func (m model) visible() []Notification {
-	return filterNotifications(m.allItems(), m.query)
+	filtered := filterNotifications(m.allItems(), m.query)
+	var ordered []Notification
+	for _, section := range splitBySection(filtered) {
+		for _, group := range groupBySession(section.Items) {
+			ordered = append(ordered, group.Items...)
+		}
+	}
+	return ordered
 }
 
 // cursor は visible() の window 行だけを指す。session 見出しは対象外なので

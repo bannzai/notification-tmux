@@ -613,3 +613,48 @@ func TestSectionsMsgErrorKeepsPreviousSectionsAndShowsDiagnosis(t *testing.T) {
 		t.Errorf("復旧後に新しいセクションへ更新されていない: %+v", rec.sections)
 	}
 }
+
+// listRows の itemIndex と visible() の添字が、同名セクションが複数 session に
+// またがっても一致すること (表示上選んだ行と cursor の指す行がずれない)
+func TestVisibleOrderMatchesListRowItemIndex(t *testing.T) {
+	m := testModel()
+	m.connected = true
+	// 組み込み Codex と設定の Codex:wrapper が両方 s1/s2 の pane に一致した状態。
+	// allItems は section 単位に連結され [builtinA(s1), builtinB(s2), wrapperA(s1), wrapperB(s2)] と
+	// session が s1,s2,s1,s2 の順で並ぶ (session でグループ化されていない)
+	m.sections = []paneSection{
+		{Title: "Codex", Agent: true, Items: []Notification{
+			{Section: "Codex", SectionKey: "codex", Session: "s1", WindowID: "@1", WindowName: "a", PaneID: "%1"},
+			{Section: "Codex", SectionKey: "codex", Session: "s2", WindowID: "@2", WindowName: "b", PaneID: "%2"},
+		}},
+		{Title: "Codex", Agent: false, Items: []Notification{
+			{Section: "Codex", SectionKey: "wrapper", Session: "s1", WindowID: "@3", WindowName: "c", PaneID: "%3"},
+			{Section: "Codex", SectionKey: "wrapper", Session: "s2", WindowID: "@4", WindowName: "d", PaneID: "%4"},
+		}},
+	}
+
+	visible := m.visible()
+	rows := m.listRows()
+	// 各 window 行 (itemIndex >= 0) について、その itemIndex 番目の visible() が同じ pane を指すこと
+	for _, row := range rows {
+		if row.itemIndex < 0 {
+			continue
+		}
+		if row.itemIndex >= len(visible) {
+			t.Fatalf("itemIndex %d が visible (%d 件) を超える", row.itemIndex, len(visible))
+		}
+		// 行のテキストは "icon index windowName" 形式。window 名で照合する
+		if want := visible[row.itemIndex].WindowName; !strings.Contains(row.text, want) {
+			t.Errorf("表示行 %q の itemIndex %d が visible()[%d]=%q(pane %s) とずれている",
+				row.text, row.itemIndex, row.itemIndex, want, visible[row.itemIndex].PaneID)
+		}
+	}
+	// 表示順は session でまとまる: s1 の 2 件 (a,c) → s2 の 2 件 (b,d)
+	got := make([]string, 0, len(visible))
+	for _, item := range visible {
+		got = append(got, item.PaneID)
+	}
+	if strings.Join(got, ",") != "%1,%3,%2,%4" {
+		t.Errorf("visible() の並びが session グループ順でない: %v", got)
+	}
+}
