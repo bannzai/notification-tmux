@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -90,12 +91,12 @@ func TestPreviewIsDiscardedWhenSelectionMoved(t *testing.T) {
 	m := testModel()
 	m.items = []Notification{{WindowID: "@1", PaneID: "%1"}, {WindowID: "@2", PaneID: "%2"}}
 
-	updated, _ := m.Update(previewMsg{paneKey: m.items[1].paneKey(), lines: []string{"古い選択の結果"}})
+	updated, _ := m.Update(previewMsg{key: m.items[1].key(), lines: []string{"古い選択の結果"}})
 	if got := updated.(model).preview; got != nil {
 		t.Errorf("選択外の pane のプレビューを取り込んでいる: %q", got)
 	}
 
-	updated, _ = m.Update(previewMsg{paneKey: m.items[0].paneKey(), lines: []string{"選択中の結果"}})
+	updated, _ = m.Update(previewMsg{key: m.items[0].key(), lines: []string{"選択中の結果"}})
 	if got := updated.(model).preview; len(got) != 1 || got[0] != "選択中の結果" {
 		t.Errorf("選択中 pane のプレビューが入っていない: %q", got)
 	}
@@ -443,5 +444,217 @@ func TestViewShowsSessionHeadersAndFilterLine(t *testing.T) {
 	}
 	if strings.Contains(view, "▸ personal") {
 		t.Error("一致しない session の見出しが残っている")
+	}
+}
+
+// 通知 1 件 + Claude セクション (2 pane) + 設定ファイル由来のセクション (1 pane)。
+// Claude の %1 は通知と同じ pane で、両方に出る
+func sectionedModel() model {
+	m := testModel()
+	m.connected = true
+	m.items = []Notification{
+		{Session: "work", WindowID: "@1", WindowIndex: "0", WindowName: "claude-work", PaneID: "%1", Icon: "🔔"},
+	}
+	m.sections = []paneSection{
+		{Title: "Claude", Items: []Notification{
+			{Section: "Claude", Session: "work", WindowID: "@1", WindowIndex: "0", WindowName: "claude-work", PaneID: "%1", Icon: iconAgentIdle},
+			{Section: "Claude", Session: "lab", WindowID: "@5", WindowIndex: "2", WindowName: "experiment", PaneID: "%5", Icon: iconAgentRunning},
+		}},
+		{Title: "Watchers", Items: []Notification{
+			{Section: "Watchers", Session: "ops", WindowID: "@7", WindowIndex: "0", WindowName: "watcher", PaneID: "%7", Icon: iconProcess},
+		}},
+	}
+	return m
+}
+
+func TestViewRendersSectionsBelowNotifications(t *testing.T) {
+	view := sectionedModel().View()
+	for _, want := range []string{
+		"Noroshi 🔔1",
+		"-- Claude (2) --",
+		"-- Watchers (1) --",
+		iconAgentRunning + " 2 experiment",
+		iconProcess + " 0 watcher",
+	} {
+		if !strings.Contains(view, want) {
+			t.Errorf("%q が描画されていない:\n%s", want, view)
+		}
+	}
+	// 通知のバッジ数はセクションの pane を数えない
+	if strings.Contains(view, "🔔4") {
+		t.Errorf("セクションの pane を通知件数に数えている:\n%s", view)
+	}
+	// 見出しはセクション → session の順で、通知の session 見出しより後に出る
+	if strings.Index(view, "-- Claude (2) --") < strings.Index(view, "▸ work (1)") {
+		t.Errorf("セクションが通知より前に出ている:\n%s", view)
+	}
+}
+
+func TestSectionsAreListedEvenWithoutNotifications(t *testing.T) {
+	m := sectionedModel()
+	m.items = nil
+	view := m.View()
+	if !strings.Contains(view, "通知なし") || !strings.Contains(view, "-- Claude (2) --") {
+		t.Fatalf("通知が無い時にセクションが消えた:\n%s", view)
+	}
+	// 「通知なし」の 1 行を layout が数えていないと、狭い画面でヘッダーが押し出される
+	m.height = 12
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) > m.height {
+		t.Errorf("描画が pane の高さ %d を超えた (%d 行)", m.height, len(lines))
+	}
+	if !strings.HasPrefix(lines[0], "Noroshi") {
+		t.Errorf("1 行目がヘッダーでない: %q", lines[0])
+	}
+}
+
+func TestCursorWalksAcrossSectionsAndRestoresByPane(t *testing.T) {
+	m := sectionedModel()
+	// 通知の %1 → Claude の %1 → Claude の %5 → Watchers の %7
+	m, _ = pressKeys(m, runesKey("j"), runesKey("j"))
+	if got := m.selectedPaneID(); got != "%5" {
+		t.Fatalf("セクションを跨いで選べていない: %q", got)
+	}
+	m, _ = pressKeys(m, runesKey("j"))
+	if got := m.selectedPaneID(); got != "%7" {
+		t.Fatalf("2 つ目のセクションへ進めない: %q", got)
+	}
+
+	// Claude の %1 (通知の %1 と同じ pane) を選んだ状態で通知が消えても、同じ行に留まる
+	m, _ = pressKeys(m, runesKey("k"), runesKey("k"))
+	if got, _ := m.selected(); got.Section != "Claude" || got.PaneID != "%1" {
+		t.Fatalf("前提が崩れている: %+v", got)
+	}
+	refreshed, _ := m.Update(notificationsMsg{items: nil})
+	if got, _ := refreshed.(model).selected(); got.Section != "Claude" || got.PaneID != "%1" {
+		t.Errorf("通知が消えた後に選択が別の行へずれた: %+v", got)
+	}
+}
+
+func TestFilterMatchesSectionTitle(t *testing.T) {
+	m := sectionedModel()
+	m, _ = pressKeys(m, runesKey("/"), runesKey("w"), runesKey("a"), runesKey("t"), runesKey("c"), tea.KeyMsg{Type: tea.KeyEnter})
+	visible := m.visible()
+	if len(visible) != 1 || visible[0].PaneID != "%7" {
+		t.Fatalf("watc の一致 = %+v", visible)
+	}
+	view := m.View()
+	if strings.Contains(view, "-- Claude") {
+		t.Errorf("一致しないセクションの見出しが残っている:\n%s", view)
+	}
+
+	// セクション名だけに一致するクエリでも、そのセクションの行が全部残る
+	m, _ = pressKeys(m, tea.KeyMsg{Type: tea.KeyEsc}, runesKey("/"), runesKey("c"), runesKey("l"), runesKey("a"), runesKey("u"), tea.KeyMsg{Type: tea.KeyEnter})
+	visible = m.visible()
+	if len(visible) != 3 {
+		t.Fatalf("clau の一致件数 = %d: %+v", len(visible), visible)
+	}
+	// 通知の claude-work (window 名) と Claude セクションの 2 行 (セクション名)
+	if visible[0].Section != "" || visible[1].Section != "Claude" || visible[2].PaneID != "%5" {
+		t.Errorf("一致した行が誤り: %+v", visible)
+	}
+}
+
+func TestFilterDenominatorCountsSectionRows(t *testing.T) {
+	m := sectionedModel()
+	// 通知 1 + Claude 2 + Watchers 1 = 全 4 行が分母
+	m, _ = pressKeys(m, runesKey("/"), runesKey("w"), runesKey("a"), runesKey("t"))
+	if want := "filter: wat_ (1/4)"; !strings.Contains(m.View(), want) {
+		t.Errorf("フィルタの分母がセクション行を含んでいない (want %q):\n%s", want, m.View())
+	}
+}
+
+func TestSectionKeyDistinguishesSameTitleRows(t *testing.T) {
+	// 同名タイトル・同一 pane でも、生成元 rule (Process) が違えば key は別になり、
+	// 再取得で選択が別の行へ飛ばない
+	builtin := Notification{Section: "Claude", SectionKey: "claude", PaneID: "%1"}
+	wrapper := Notification{Section: "Claude", SectionKey: "my-wrapper", PaneID: "%1"}
+	if builtin.key() == wrapper.key() {
+		t.Errorf("同名タイトル・同一 pane の key が衝突している: %q", builtin.key())
+	}
+	// 通知 (SectionKey 空) はセクション行と別の key
+	notif := Notification{Section: "", SectionKey: "", PaneID: "%1"}
+	if notif.key() == builtin.key() {
+		t.Errorf("通知とセクション行の key が衝突している: %q", notif.key())
+	}
+}
+
+func TestSectionsMsgErrorKeepsPreviousSectionsAndShowsDiagnosis(t *testing.T) {
+	m := sectionedModel()
+	before := len(m.sections)
+	if before == 0 {
+		t.Fatal("前提が崩れている (セクションが無い)")
+	}
+
+	// ps 失敗などの取得エラーでは、表示中のセクションを消さず原因だけ差し替える
+	psErr := fmt.Errorf("プロセス一覧 (ps) の取得に失敗: no such file")
+	updated, _ := m.Update(sectionsMsg{sections: nil, err: psErr})
+	got := updated.(model)
+	if len(got.sections) != before {
+		t.Errorf("取得失敗で表示中のセクションが消えた: %d -> %d", before, len(got.sections))
+	}
+	if got.sectionErr == nil {
+		t.Error("取得失敗の原因が表示用に保持されていない")
+	}
+	if !strings.Contains(got.View(), "ps) の取得に失敗") {
+		t.Errorf("取得失敗の原因が描画されていない:\n%s", got.View())
+	}
+
+	// 復旧すると原因が消え、新しいセクションで更新される
+	fresh := []paneSection{{Title: "Codex", Agent: true, Items: []Notification{
+		{Section: "Codex", SectionKey: "codex", Session: "s", WindowID: "@9", WindowIndex: "0", WindowName: "w", PaneID: "%9", Icon: iconAgentIdle},
+	}}}
+	recovered, _ := got.Update(sectionsMsg{sections: fresh, err: nil})
+	rec := recovered.(model)
+	if rec.sectionErr != nil {
+		t.Error("復旧後も取得失敗の原因が残っている")
+	}
+	if len(rec.sections) != 1 || rec.sections[0].Title != "Codex" {
+		t.Errorf("復旧後に新しいセクションへ更新されていない: %+v", rec.sections)
+	}
+}
+
+// listRows の itemIndex と visible() の添字が、同名セクションが複数 session に
+// またがっても一致すること (表示上選んだ行と cursor の指す行がずれない)
+func TestVisibleOrderMatchesListRowItemIndex(t *testing.T) {
+	m := testModel()
+	m.connected = true
+	// 組み込み Codex と設定の Codex:wrapper が両方 s1/s2 の pane に一致した状態。
+	// allItems は section 単位に連結され [builtinA(s1), builtinB(s2), wrapperA(s1), wrapperB(s2)] と
+	// session が s1,s2,s1,s2 の順で並ぶ (session でグループ化されていない)
+	m.sections = []paneSection{
+		{Title: "Codex", Agent: true, Items: []Notification{
+			{Section: "Codex", SectionKey: "codex", Session: "s1", WindowID: "@1", WindowName: "a", PaneID: "%1"},
+			{Section: "Codex", SectionKey: "codex", Session: "s2", WindowID: "@2", WindowName: "b", PaneID: "%2"},
+		}},
+		{Title: "Codex", Agent: false, Items: []Notification{
+			{Section: "Codex", SectionKey: "wrapper", Session: "s1", WindowID: "@3", WindowName: "c", PaneID: "%3"},
+			{Section: "Codex", SectionKey: "wrapper", Session: "s2", WindowID: "@4", WindowName: "d", PaneID: "%4"},
+		}},
+	}
+
+	visible := m.visible()
+	rows := m.listRows()
+	// 各 window 行 (itemIndex >= 0) について、その itemIndex 番目の visible() が同じ pane を指すこと
+	for _, row := range rows {
+		if row.itemIndex < 0 {
+			continue
+		}
+		if row.itemIndex >= len(visible) {
+			t.Fatalf("itemIndex %d が visible (%d 件) を超える", row.itemIndex, len(visible))
+		}
+		// 行のテキストは "icon index windowName" 形式。window 名で照合する
+		if want := visible[row.itemIndex].WindowName; !strings.Contains(row.text, want) {
+			t.Errorf("表示行 %q の itemIndex %d が visible()[%d]=%q(pane %s) とずれている",
+				row.text, row.itemIndex, row.itemIndex, want, visible[row.itemIndex].PaneID)
+		}
+	}
+	// 表示順は session でまとまる: s1 の 2 件 (a,c) → s2 の 2 件 (b,d)
+	got := make([]string, 0, len(visible))
+	for _, item := range visible {
+		got = append(got, item.PaneID)
+	}
+	if strings.Join(got, ",") != "%1,%3,%2,%4" {
+		t.Errorf("visible() の並びが session グループ順でない: %v", got)
 	}
 }

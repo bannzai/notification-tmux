@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// リモート host (ssh 先) の tmux をサイドバーへ載せる (issue #75。GUI 版 #38 / #39 のパリティ)。
+// リモート host (ssh 先) の tmux をサイドバーへ載せる (issue #75。削除済み GUI 版の #38 / #39 のパリティ)。
 //
 // 一覧・操作: ローカルと同じ tmux サブコマンドを `ssh <host> tmux -u ...` として実行する
 // (GUI 版 ADR 0010 のコマンドラップ方針)。引数はリモート shell 向けに single quote で包む。
@@ -28,16 +28,6 @@ const (
 	// コマンドの失敗 (tmux の no server 等) とはこれで区別する
 	sshFailureStatus = 255
 )
-
-// GUI 版と同じ `~/.config/noroshi/config` (Ghostty 互換の `key = value` 形式)。
-// XDG_CONFIG_HOME があればその下を見る
-func defaultConfigFile() string {
-	home := os.Getenv("XDG_CONFIG_HOME")
-	if home == "" {
-		home = filepath.Join(os.Getenv("HOME"), ".config")
-	}
-	return filepath.Join(home, "noroshi", "config")
-}
 
 // ssh の既定オプション (GUI 版 TmuxClient.sshBatchOptions / RemoteStopForwarder と同じ意図):
 //   - BatchMode: 鍵認証前提。パスワードプロンプトで再取得や attach を止めない
@@ -78,8 +68,9 @@ func sshControlDir() string {
 	return dir
 }
 
-// config ファイルの remote-host を記述順で返す。重複は先勝ちで畳む (同じ host へ二重に
-// control client を張らないため)。ファイルが無ければ空 = リモート未設定
+// 設定ファイル (section 行と同じ key = value 形式) の remote-host を記述順で返す。
+// 重複は先勝ちで畳む (同じ host へ二重に control client を張らないため)。
+// ファイルが無ければ空 = リモート未設定
 func readRemoteHosts(path string) []string {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -103,7 +94,7 @@ func parseRemoteHosts(text string) []string {
 }
 
 // `key = value` の 1 行を分ける。空行・`#` コメント・`=` を含まない行は無視する
-// (GUI 版 GhosttyTheme.parseLine と同じ規則)
+// (config.go の parseSectionRules と同じ規則。削除済みの GUI 版 config と互換)
 func parseConfigLine(line string) (key, value string, ok bool) {
 	trimmed := strings.TrimSpace(line)
 	if trimmed == "" || strings.HasPrefix(trimmed, "#") {

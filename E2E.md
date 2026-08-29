@@ -1,108 +1,57 @@
 # E2E 動作確認手順
 
-Noroshi の変更後は、ユニットテストだけで完了にせず、実 tmux と起動中のアプリで確認する。
+suzu の変更後は、ユニットテスト (`make test-cli`) だけで完了にせず、実 tmux で確認する。
 
-## 事前準備
-
-専用の tmux session を作成し、ユーザーが作業中の session には接続しない。
+## 自動検証 (隔離 socket)
 
 ```sh
-tmux new-session -d -s noroshi-e2e
-tmux new-window -t noroshi-e2e -n notification
-tmux list-windows -t noroshi-e2e -F '#{session_name} #{window_id} #{window_name}'
+make verify-cli
 ```
 
-出力から session 名と window ID (`@数字`) を控える。
+suzu をビルドして `suzu/verify.sh` を実行する。verify.sh は隔離 socket の tmux だけを使い、普段の tmux (default socket) や `~/.tmux.conf` には触れない。全項目 PASS で exit 0。失敗時は最初の失敗時点の状態 (外側 pane・サイドバー画面・内側 session・hook・キー) を標準出力に dump する。
 
-常用の /Applications/Noroshi.app が起動している場合は終了してから `make run` する。他セッションの Claude Code Stop hook が `open -g "noroshi://..."` を実行すると /Applications 側が随時自動で再起動するため、同名プロセスが 2 つになり、キーストロークやメニュー操作が意図しない側のアプリへ誤配送される (「新規 session」ピッカーにパス入力が渡り tmux session が誤作成された実例あり)。UI 操作の前に `pgrep -x Noroshi` で対象のビルドだけが起動していることを確認する。
+キー入力の実機経路も、端末エミュレータの代役 (隔離 socket の tmux) の pane へ `send-keys` で書き込む形で verify.sh が再現する。
 
-## 実行手順
+- コピーモード: `prefix + [` が外側を素通りして内側がコピーモードに入り、選択・コピーした行が内側の paste buffer に入ること
+- OSC52: 内側のコピーで出る OSC52 が外側を透過し、実端末の代役の pane 出力 (`pipe-pane` で捕捉) に選択した行の base64 として現れること
+- マウス: 実端末が送る SGR シーケンス (`CSI < ボタン ; 列 ; 行 M/m`) を書き込み、サイドバーのクリックでフォーカスが左へ、右 pane のクリックで右へ移ること、右 pane のホイールが内側 tmux に届くこと
 
-1. `make run` を実行してビルドし、Noroshi.app を起動する。
-2. Noroshi のウィンドウを最前面に表示する。
-3. サイドバーに実 tmux の `noroshi-e2e` session と window が表示されることを確認する (未追加ならサイドバー下部の＋で追加する)。起動直後は session 未選択で自動 attach せず (issue #48)、右側に素のターミナル (ログインシェル) が表示される (issue #54)。session 未選択のまま cmd+opt+s (サイドバーにフォーカス) を押しても attach されないことを `tmux list-clients` で確認する (issue #57)。サイドバーで session を選択すると右側が tmux の terminal に切り替わることを確認する。
-4. 控えた値を使って通知 URL を実行する。
+CI (`.github/workflows/ci-e2e.yml`) でも同じ verify.sh が tmux 3.6a (必須) と 3.4 / Homebrew 最新版 (参考) で走る。
 
-   ```sh
-   open -g "noroshi://stop?session=noroshi-e2e&window=@<window_id>"
-   ```
+## 手動確認 (実端末)
 
-   インストール済みの Noroshi (/Applications 等) が LaunchServices に登録されていると、`open -g "noroshi://..."` はそちらを起動して URL イベントを奪う。開発ビルドを検証する時は `-a` で配送先を名指しする。
+verify.sh は IME (変換前文字列の描画) を対象外にしているため、日本語入力に関係する変更は普段の端末で確認する。次の 2 点は端末エミュレータ側の実装に依存するため verify.sh の対象外で、必要なら普段の端末で確認する。
 
-   ```sh
-   open -g -a "$PWD/tmp/DerivedData/Build/Products/Debug/Noroshi.app" "noroshi://stop?session=noroshi-e2e&window=@<window_id>"
-   ```
+- OSC52 を受けた端末が実際にシステムのクリップボードへ書き込むか (verify.sh が確かめるのは OSC52 が端末に届くところまで)
+- 端末がマウス操作を SGR シーケンスとして送るか (verify.sh はシーケンスを直接書き込む)
 
-5. 対象 window に未読バッジが付き、対象 window を選択するとバッジが消えることを確認する。
-6. タブが関係する変更では、「移動 > 新規タブ」(cmd+T) でタブバーが表示され、新規タブに素のターミナルが開き (issue #54)、タブ切替 (ctrl+tab) で選択 session がタブごとに保たれ、「File > タブを閉じる」(cmd+W) で閉じられることを確認する。新規タブで cmd+opt+s を押しても attach されないことも確認する (issue #57)。素のターミナルで `exit` するとタブが閉じ、最後の 1 枚では新しいシェルに置き換わることを確認する。
-7. リモートホスト (ssh) が関係する変更では、鍵認証で入れる ssh 先がある場合のみ `~/.config/noroshi/config` に `remote-host = <host>` を追記し、リモート session の一覧表示・attach・切替を確認する (確認後に追記を戻す)。ssh 先が無い環境ではユニットテストとローカル経路の確認までとし、報告に未検証と明記する。
-8. 日本語 IME が関係する変更では、変換前の文字列がキャレット付近に表示され、文字を短縮・削除したときに古い文字が残らないことを確認する。
-9. terminal の表示寸法が関係する変更では、window が Noroshi の格子より小さい状態 (detach 状態で作った `noroshi-e2e` は 80x24 のまま) で attach し、terminal の右・下の余白が `·` (fill-character) で埋まらず背景色のままであることを確認する (issue #60)。
-10. terminal の描画・スクロールが関係する変更 (SwiftTerm の pin 更新、font・表示寸法の再同期、レンダリングまわり) では、attach 中の window に Claude Code の thinking 相当の負荷 (連続スクロール + pane title 更新 + CR スピナー) をかけ、ステータスライン・pane border の残像が積み上がらないことを確認する (issue #49, #58)。tmux のスクロール経路は pane の幅で変わるため、全幅 pane (DECSTBM 上下マージン経路) と左右分割 pane (DECSLRM 左右マージン経路) の両方で確認する (#58 の再現報告は左右分割のみ)。
+1. `make cli` で `~/.local/bin/suzu` を更新する。
+2. 新しい端末 (Alacritty 等) を開き `suzu start` を実行する。左にサイドバー、右に普段の tmux が表示される。既に外側が構築済みなら attach だけ行う (冪等)。`suzu status` で外側の状態を確認できる。
+3. 内側 tmux で `prefix + N` を押すとサイドバーへフォーカスが移り、`q` / `Esc` / `prefix + N` で内側へ戻ることを確認する。`prefix + b` で表示/非表示が切り替わることを、内側フォーカス・サイドバーフォーカスの両方から確認する。
+4. 通知は内側 tmux の pane option `@claude-waiting` で表現する。任意の pane で次を実行し、サイドバーに session 見出しと window 行が現れ、`Enter` で右 pane がその window へ切り替わることを確認する (フォーカスは左のまま)。解除すると一覧から消える。
 
    ```sh
-   # 全幅 pane (DECSTBM 経路)
-   tmux send-keys -t noroshi-e2e:@<window_id> 'i=0; while [ "$i" -lt 3000 ]; do i=$((i+1)); printf "\033]2;load %d\007scroll %d\n| thinking\r" "$i" "$i"; sleep 0.02; done; printf "\nDONE\n"' Enter
-
-   # 左右分割 pane (DECSLRM 経路)。pane border の残像を確認するため border-status を表示する
-   tmux set -t noroshi-e2e pane-border-status top
-   tmux split-window -h -t noroshi-e2e:@<window_id>
-   tmux list-panes -t noroshi-e2e:@<window_id> -F '#{pane_id} #{pane_left}'
+   tmux set-option -p @claude-waiting "🔔test" && tmux set-option -w @claude-waiting "🔔test"
+   tmux set-option -pu @claude-waiting && tmux set-option -wu @claude-waiting
    ```
 
-   `#{pane_left}` が 0 の pane (左側) に同じ負荷を `tmux send-keys -t %<pane_id>` で流す。各負荷の `DONE` 表示後に、最下行のステータスラインと pane border が 1 本のまま増殖していないこと、行頭に前フレームのグリフ断片が残っていないことを確認する。あわせて window 切替 (cmd+shift+]) と往復後も残像が現れないことを確認する。
-11. 確認結果を残すため、Noroshi の画面が見える状態でスクリーンショットを撮る。
+5. 日本語入力が関係する変更では、右 pane のシェルで IME の変換前文字列が崩れずに表示されることを確認する。
+6. 確認結果を残す場合は、サイドバー pane の描画をテキストで取得して PR に貼る。
 
    ```sh
-   mkdir -p tmp/e2e
-   screencapture -x tmp/e2e/noroshi-e2e.png
+   tmux -L suzu capture-pane -p -t "$(tmux -L suzu list-panes -t suzu:0 -f '#{@suzu-sidebar}' -F '#{pane_id}' | head -1)"
    ```
-
-   `screencapture -x` は画面全体を撮影するため、Noroshi を最前面にしてから実行する。ウィンドウ単位で撮影する場合は `screencapture -l <window_id> -x tmp/e2e/noroshi-e2e.png` を使う。
-
-## 並列実行時の注意
-
-worktree が分かれていても、Agent 間で macOS の GUI セッション、最前面ウィンドウ、同じ bundle identifier の Noroshi、tmux サーバは共有される。複数 Agent が同時に E2E を実行すると、最前面や入力先を取り合い、別の Agent の画面を撮影する可能性がある。
-
-- E2E とスクリーンショットは同じ GUI セッションで同時に実行しない。
-- 可能なら Agent ごとに専用 tmux session と専用 macOS ユーザーセッションを使う。
-- `screencapture -l` を使う場合も、対象ウィンドウが最小化・非表示になっていないことを確認する。
-- 最前面の取り合いを避けるには、対象 Noroshi の pid から CGWindowID を取得し、`screencapture -l <CGWindowID> -x` でウィンドウを直接撮影する (最前面でなくても撮影できる)。
-
-  ```sh
-  swift -e 'import CoreGraphics; let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as! [[String: Any]]; for w in info where (w["kCGWindowOwnerPID"] as? Int) == <pid> && (w["kCGWindowLayer"] as? Int) == 0 { print(w["kCGWindowNumber"] ?? "") }'
-  ```
-
-- 別 Agent の tmux 操作 (switch-client 等) で対象 client の接続先が変わることがある。撮影の直前・直後に `tmux list-clients -F '#{client_pid} #{client_session}'` で attach 先が想定 session のままかを確認し、変わっていたら戻して撮り直す。
-
-## PR / Issue へのスクリーンショット添付
-
-リポジトリ owner が `bannzai` の場合だけ、`gh-r2-image` を使って R2 にアップロードする。owner は次で確認する。
-
-```sh
-gh repo view --json owner -q .owner.login
-```
-
-`bannzai` と表示された場合:
-
-```sh
-gh-r2-image upload --no-copy --width 600 tmp/e2e/noroshi-e2e.png
-```
-
-出力された Markdown または HTML を PR / Issue の本文へ貼り付ける。`--no-copy` は必ず付ける。owner が `bannzai` 以外の場合は R2 へアップロードせず、本文にスクリーンショットの確認結果を文章で記載する。
 
 ## 後片付け
 
-```sh
-tmux kill-session -t noroshi-e2e
-```
+`suzu stop` で外側の session を落とし、内側へ注入したキーバインドと hook を解除する。内側の session・window には触れない。普段使いの端末では `suzu start` を起動時に実行する設定 (Alacritty の `shell` 等) があれば、端末を開き直すだけで復帰する。
 
-## suzu のリモート host (Phase 3, issue #75) の実機確認
+## リモート host (issue #75) の実機確認
 
 鍵認証で入れる ssh 先がある場合のみ行う。無い環境では `make verify-cli` (ssh を隔離 socket の tmux へ差し替えた代役での検証) までとし、報告に未検証と明記する。
 
-1. リモート側の準備: リモートの `~/.claude/settings.json` に、ローカルと同じ `@claude-waiting` を set する hook (`tmux set-option -p @claude-waiting "🔔" && tmux set-option -w @claude-waiting "🔔"`) を入れる。suzu 側の hook 注入や `~/.noroshi.sock` の転送は不要で、リモートの tmux に option が set されれば control mode の購読で届く。
-2. `~/.config/noroshi/config` に `remote-host = <host>` を追記する。remote-host はサイドバーの起動時に読むため、`suzu toggle` を 2 回 (閉じて開く) で読み直させる。
+1. リモート側の準備: リモートの `~/.claude/settings.json` に、ローカルと同じ `@claude-waiting` を set する hook (`tmux set-option -p @claude-waiting "🔔" && tmux set-option -w @claude-waiting "🔔"`) を入れる。suzu 側の hook 注入や socket の転送は不要で、リモートの tmux に option が set されれば control mode の購読で届く。
+2. `~/.config/suzu/config` に `remote-host = <host>` を追記する。remote-host はサイドバーの起動時に読むため、`suzu toggle` を 2 回 (閉じて開く) で読み直させる。
 3. リモートの tmux (Claude Code の hook 相当) で `tmux set-option -p @claude-waiting '🔔'; tmux set-option -w @claude-waiting '🔔'` を実行し、サイドバーに `▸ <host>:<session> (1)` の見出しと window 行が出ること、選択するとリモート pane のプレビューが出ることを確認する。購読は tmux 内部の 1 秒タイマーで評価されるため、反映は最大約 1 秒遅れる。
 4. サイドバーでその通知に Enter し、内側 tmux に `<host>:<session>` という名前の window が開いてリモート session に attach され、右 pane で前面になることを確認する。リモート側でも通知の window がカレントになっていること、もう一度 Enter しても window が増えず既存の window が選ばれることを確認する。
 5. リモートで `tmux set-option -pu @claude-waiting; tmux set-option -wu @claude-waiting` (解除) し、サイドバーから消えることを確認する。

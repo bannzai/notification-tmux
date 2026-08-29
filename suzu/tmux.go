@@ -9,21 +9,37 @@ import (
 	"strings"
 )
 
-// @claude-waiting が set された window 1 件。pane と window の両方に set されるため
-// window 単位に畳んだ後の姿を表す
+// サイドバーの 1 行分の pane。通知 (@claude-waiting が set された window。pane と window の
+// 両方に set されるため window 単位に畳んだ後の姿) と、セクション (sections.go) の
+// プロセス一致 pane の両方をこの型で運ぶ。
+// JSON タグは serve がブラウザへそのまま配るためのもの (serve が配るのは通知だけなので
+// セクション由来のフィールドは omitempty で落ちる)
 type Notification struct {
-	// 通知が出ている tmux server の host。ローカル (内側 tmux) は空
-	Host    string
-	Session string
+	// 通知が出ている tmux server の host (remote.go)。ローカル (内側 tmux) は空
+	Host string `json:"host,omitempty"`
+	// 属するセクションの名前。通知は空
+	Section string `json:"section,omitempty"`
+	Session string `json:"session"`
 	// switch-client の target に使う。tmux は `%` `$` `@` で始まる target を
 	// pane/session/window の ID として解釈するため、その形の session 名は
 	// 名前では引けない。表示は Session (名前)、指定は SessionID と分ける
-	SessionID   string
-	WindowID    string
-	WindowIndex string
-	WindowName  string
-	PaneID      string
-	Icon        string
+	SessionID   string `json:"session_id"`
+	WindowID    string `json:"window_id"`
+	WindowIndex string `json:"window_index"`
+	WindowName  string `json:"window_name"`
+	PaneID      string `json:"pane_id"`
+	Icon        string `json:"icon"`
+	// セクションの一意識別 (生成元 rule の Process)。同名タイトルのセクション
+	// (組み込み Claude と設定の section = Claude:my-wrapper 等) を区別するため key() に含める。
+	// 通知は空
+	SectionKey string `json:"section_key,omitempty"`
+}
+
+// 再取得の前後で同じ行を探し直すための識別子。同じ pane が通知と複数のセクションに
+// 出ることがあるため、pane だけでなくセクションのタイトルと一意識別も含める。
+// pane ID は server 内でしか一意でなく host をまたぐと衝突するため host も含める
+func (n Notification) key() string {
+	return n.Host + fieldSeparator + n.Section + fieldSeparator + n.SectionKey + fieldSeparator + n.PaneID
 }
 
 // サイドバーの見出しに出す session の表示名。リモートは host を付けて区別する
@@ -34,16 +50,6 @@ func (n Notification) sessionLabel() string {
 	return n.Host + ":" + n.Session
 }
 
-// window ID は server 内でしか一意でなく host をまたぐと衝突するため、
-// 選択の追跡は host と組にした値で行う
-func (n Notification) key() string {
-	return n.Host + fieldSeparator + n.WindowID
-}
-
-func (n Notification) paneKey() string {
-	return n.Host + fieldSeparator + n.PaneID
-}
-
 // 外側 tmux でサイドバーの隣にいる pane。内側 tmux へ attach している右 pane を指す
 type innerPane struct {
 	ID  string
@@ -51,7 +57,7 @@ type innerPane struct {
 }
 
 // tmux 出力のフィールド区切り。window 名やコマンド行にはタブが入り得るため、
-// テキストに現れない ASCII Unit Separator を使う (Noroshi/Noroshi/TmuxModels.swift と同じ)
+// テキストに現れない ASCII Unit Separator を使う (削除済みの GUI 版 TmuxModels.swift と同じ規則)
 const fieldSeparator = "\x1f"
 
 // tmux 3.4 は list-* の出力で制御文字を 8 進の可視化表記に変えるため、区切りが
@@ -153,6 +159,8 @@ func withDetail(err error, stderr string) error {
 	return fmt.Errorf("%w (%s)", err, strings.ReplaceAll(detail, "\n", " / "))
 }
 
+// 通知一覧 (@claude-waiting) を取り直す。list-panes だけで速いため、遅い ps を伴う
+// セクション取得 (fetchSectionsMsg) とは別メッセージに分ける
 func fetchNotifications(cfg Config) notificationsMsg {
 	out, err := output(cfg.innerCommand("list-panes", "-a", "-f", waitingFilter, "-F", waitingFormat))
 	if err != nil {
@@ -160,6 +168,12 @@ func fetchNotifications(cfg Config) notificationsMsg {
 		return notificationsMsg{err: fmt.Errorf("通知一覧の取得に失敗: %w", err)}
 	}
 	return notificationsMsg{items: parseNotifications(out, cfg.paneWaitingOption)}
+}
+
+// セクション (プロセス別の pane 一覧) を取り直す
+func fetchSectionsMsg(cfg Config) sectionsMsg {
+	sections, err := fetchSections(cfg)
+	return sectionsMsg{sections: sections, err: err}
 }
 
 // pane ローカルに set された @claude-waiting。window から継承しただけの pane では空になる。
@@ -268,8 +282,10 @@ func fetchInnerPane(cfg Config) (innerPane, error) {
 	return pane, nil
 }
 
-// 通知の window を内側で表示する。フォーカスはサイドバーに残し、右 pane へ移るのは
-// prefix + jump key / q / Esc の明示操作だけにする
+// 通知・セクションの pane を内側で表示する。フォーカスはサイドバーに残し、右 pane へ移るのは
+// prefix + jump key / q / Esc の明示操作だけにする。
+// 通知行は window を開く (select-window)。セクション行は加えて select-pane も行う:
+// 検出した Claude/Codex が window の非アクティブ pane にいても、その pane へ到達させる
 func jump(cfg Config, n Notification) error {
 	if n.Host != "" {
 		return jumpRemote(cfg, n)
@@ -278,14 +294,38 @@ func jump(cfg Config, n Notification) error {
 	if err != nil {
 		return err
 	}
+	return jumpClient(cfg, n, pane.TTY)
+}
+
+// serve (iPhone) からのジャンプ。外側 tmux が無い (daemon 単体で使っている) 時は
+// 右 pane の tty で client を選べないため、内側の実 client の先頭を切り替える
+func jumpAnyClient(cfg Config, n Notification) error {
+	tty := ""
+	if pane, err := fetchInnerPane(cfg); err == nil {
+		tty = pane.TTY
+	}
+	return jumpClient(cfg, n, tty)
+}
+
+// 通知の window を current にし、paneTTY に一致する実 client (無ければ先頭の実 client) を
+// その session へ切り替える
+func jumpClient(cfg Config, n Notification, paneTTY string) error {
 	if err := runTmux(cfg.innerCommand("select-window", "-t", n.WindowID)); err != nil {
 		return fmt.Errorf("select-window に失敗: %w", err)
+	}
+	// select-pane はセクション行 (特定 pane を狙う) だけに限定する。通知行の PaneID は、
+	// 複数 pane の window で通知元を確定できなかった時に先頭候補を便宜的に持つ場合があり、
+	// それを強制選択すると window 本来のアクティブ pane ではなく無関係な pane を表示してしまう
+	if n.Section != "" {
+		if err := runTmux(cfg.innerCommand("select-pane", "-t", n.PaneID)); err != nil {
+			return fmt.Errorf("select-pane に失敗: %w", err)
+		}
 	}
 	out, err := output(cfg.innerCommand("list-clients", "-F", clientFormat))
 	if err != nil {
 		return fmt.Errorf("list-clients に失敗: %w", err)
 	}
-	client := parseRealClient(out, pane.TTY)
+	client := parseRealClient(out, paneTTY)
 	if client == "" {
 		return fmt.Errorf("内側 tmux の実 client が見つかりません")
 	}
@@ -295,13 +335,19 @@ func jump(cfg Config, n Notification) error {
 	return nil
 }
 
+// 通知元 pane へキーを 1 つ送る (serve のボタン)。key は serve 側のホワイトリストを通った
+// tmux のキー名 (Enter / Escape / y 等) だけが来る前提で、ここでは検査しない
+func sendKey(cfg Config, paneID string, key string) error {
+	if err := runTmux(cfg.innerCommand("send-keys", "-t", paneID, key)); err != nil {
+		return fmt.Errorf("send-keys に失敗: %w", err)
+	}
+	return nil
+}
+
 // 選択中の通知が出ている pane の見た目を、カーソル移動と一覧更新の時だけ取りに行く。
 // pane が消えている等で失敗したらプレビューを畳むだけにして、サイドバーは動かし続ける
-func fetchPreview(cfg Config, n Notification, limit int) []string {
-	if n.Host != "" {
-		return fetchRemotePreview(cfg, n.Host, n.PaneID, limit)
-	}
-	out, err := output(cfg.innerCommand("capture-pane", "-p", "-t", n.PaneID))
+func fetchPreview(cfg Config, paneID string, limit int) []string {
+	out, err := output(cfg.innerCommand("capture-pane", "-p", "-t", paneID))
 	if err != nil {
 		return nil
 	}

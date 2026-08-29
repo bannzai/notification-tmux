@@ -35,9 +35,14 @@ var outerOptions = []struct {
 	// (内側 client は mouse を掴んでいるため wheel/クリックは内側へ転送される)
 	{"mouse", "on"},
 
-	// 内側 tmux からの escape sequence (OSC52 等) を実端末へ透過する
+	// 内側 tmux からの escape sequence (OSC52 等) を実端末へ透過する。
+	// set-clipboard は on にする: external だと tmux は「pane 内のアプリが出す OSC52」を
+	// 無視する (input_osc_52 は state != on で即 return)。外側から見た内側 tmux は
+	// pane 内のアプリなので、内側のコピーで出る OSC52 は external では実端末へ届かない
+	// (verify.sh の 5j で実測)。on にすると外側にも paste buffer が溜まるが、
+	// 外側は buffer を使わないため害は無い
 	{"allow-passthrough", "all"},
-	{"set-clipboard", "external"},
+	{"set-clipboard", "on"},
 
 	// nested での ESC 遅延をなくす
 	{"escape-time", "0"},
@@ -187,29 +192,36 @@ func findPrefixKeyBinding(listKeysOutput string, key string) string {
 	return ""
 }
 
-// 内側 tmux の「どこかで set-option された」を doorbell ファイルへ伝える hook を注入する
-// (メモリ上のみ・冪等)。control mode の購読は attach 中 session の pane に限られるため、
-// 別 session の @claude-waiting を拾う経路はこの global hook が担う。
+// doorbell ファイルを touch する global hook。after-set-option = どこかで set-option された
+// (= @claude-waiting の変化)。control mode の購読は attach 中 session の pane に限られるため、
+// 別 session の通知はこの hook が担う。
+// pane-title-changed のような高頻度で発火し得るイベントは足さない: doorbell は通知の再取得も
+// 促すため、100ms 未満で発火し続けると debounce が毎回リセットされ通知の反映が飢餓する。
+// pane 内のプロセスの入れ替わりはセクション専用の時間駆動の見直し (watcher.go) で拾う
+var doorbellHooks = []string{"after-set-option"}
+
+// 内側 tmux へ doorbell hook を注入する (メモリ上のみ・冪等)。
 // hook 内で set-option すると再帰発火するため touch しか行わない。
-// -g (置換) ではなく -ga (配列への追記) を使い、ユーザー自身の
-// after-set-option hook を消さないようにする
+// -g (置換) ではなく -ga (配列への追記) を使い、ユーザー自身の hook を消さないようにする
 func installDoorbellHook(cfg Config) {
 	if err := os.MkdirAll(filepath.Dir(cfg.DoorbellFile), 0o755); err != nil {
 		return
 	}
-	if len(doorbellHookTargets(cfg)) > 0 {
-		return
+	for _, hook := range doorbellHooks {
+		if len(doorbellHookTargets(cfg, hook)) > 0 {
+			continue
+		}
+		cfg.innerCommand("set-hook", "-ga", hook,
+			"run-shell -b "+shellQuote("touch "+shellQuote(cfg.DoorbellFile))).Run()
 	}
-	cfg.innerCommand("set-hook", "-ga", "after-set-option",
-		"run-shell -b "+shellQuote("touch "+shellQuote(cfg.DoorbellFile))).Run()
 }
 
-func doorbellHookTargets(cfg Config) []string {
-	out, err := output(cfg.innerCommand("show-hooks", "-g", "after-set-option"))
+func doorbellHookTargets(cfg Config, hook string) []string {
+	out, err := output(cfg.innerCommand("show-hooks", "-g", hook))
 	if err != nil {
 		return nil
 	}
-	return parseDoorbellHookTargets(out, cfg.DoorbellFile)
+	return parseDoorbellHookTargets(out, hook, cfg.DoorbellFile)
 }
 
 // show-hooks の出力から、doorbell ファイルを touch する自分のエントリだけを拾い、
@@ -217,11 +229,11 @@ func doorbellHookTargets(cfg Config) []string {
 // tmux 3.6 は値の入った hook を配列表記 (after-set-option[0] <command>) で出し、
 // 未設定なら名前だけの行になる。添字を持たない単独エントリ表記の版もあるため両方受ける。
 // 添字は解除しても振り直されないため、複数拾っても順に解除してよい
-func parseDoorbellHookTargets(out string, doorbellFile string) []string {
+func parseDoorbellHookTargets(out string, hook string, doorbellFile string) []string {
 	var targets []string
 	for _, line := range strings.Split(out, "\n") {
 		name, command, found := strings.Cut(strings.TrimSpace(line), " ")
-		if !found || !strings.HasPrefix(name, "after-set-option") {
+		if !found || !strings.HasPrefix(name, hook) {
 			continue
 		}
 		if strings.Contains(command, doorbellFile) {
@@ -287,12 +299,20 @@ func startFailure(cfg Config, err error) error {
 		"`ps ax | grep \"tmux -L %s\"` で確認して kill してください", err, cfg.OuterSocket)
 }
 
-// 外側 server を額縁として仕立てる (設定 + サイドバー)
-func initializeOuter(cfg Config) error {
+// outerOptions を外側 server へ流し込む
+func applyOuterOptions(cfg Config) error {
 	for _, option := range outerOptions {
 		if err := runTmux(cfg.outerCommand("set-option", "-g", option.name, option.value)); err != nil {
 			return fmt.Errorf("外側の %s 設定に失敗: %w", option.name, err)
 		}
+	}
+	return nil
+}
+
+// 外側 server を額縁として仕立てる (設定 + サイドバー)
+func initializeOuter(cfg Config) error {
+	if err := applyOuterOptions(cfg); err != nil {
+		return err
 	}
 	return openSidebar(cfg)
 }
@@ -347,8 +367,16 @@ func cmdStart(cfg Config) error {
 			}
 			return err
 		}
-	} else if err := restoreInnerPane(cfg); err != nil {
-		return err
+	} else {
+		// 旧版バイナリが構築した外側 server が残ったまま make cli で更新して start した時も、
+		// 設定値を最新へ揃えるために毎回流し込む。set-option -g は同じ値を何度入れても
+		// 状態が変わらない (冪等) ので、既に構築済みの外側へ再適用して差し支えない
+		if err := applyOuterOptions(cfg); err != nil {
+			return err
+		}
+		if err := restoreInnerPane(cfg); err != nil {
+			return err
+		}
 	}
 	installInnerKeys(cfg)
 	installDoorbellHook(cfg)
@@ -435,8 +463,10 @@ func cmdStop(cfg Config) error {
 	// どちらも「自分が入れたもの」だけを狙って外し、ユーザー自身の bind・hook は残す
 	unbindInjectedKey(cfg, cfg.JumpKey)
 	unbindInjectedKey(cfg, cfg.ToggleKey)
-	for _, target := range doorbellHookTargets(cfg) {
-		cfg.innerCommand("set-hook", "-gu", target).Run()
+	for _, hook := range doorbellHooks {
+		for _, target := range doorbellHookTargets(cfg, hook) {
+			cfg.innerCommand("set-hook", "-gu", target).Run()
+		}
 	}
 	if !outerExists(cfg) {
 		fmt.Printf("外側 tmux (socket: %s): 未起動\n", cfg.OuterSocket)

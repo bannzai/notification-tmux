@@ -13,25 +13,41 @@ type displayRow struct {
 	itemIndex int
 }
 
+// 通知は見出しなしで先頭に、セクションは名前と件数の見出しを付けてその下に並べる。
+// どちらも配下は session ごとにまとめる
 func (m model) listRows() []displayRow {
 	var rows []displayRow
 	index := 0
-	for _, group := range groupBySession(m.visible()) {
-		rows = append(rows, displayRow{
-			text:      fmt.Sprintf("%s %s (%d)", sessionMarker, group.Session, len(group.Items)),
-			style:     styleSession,
-			itemIndex: -1,
-		})
-		for _, item := range group.Items {
-			// session 名は見出しに出るので window 行からは外す
+	for _, section := range splitBySection(m.visible()) {
+		if section.Title != "" {
 			rows = append(rows, displayRow{
-				text:      fmt.Sprintf("%s %s %s", item.Icon, item.WindowIndex, item.WindowName),
-				itemIndex: index,
+				text:      sectionHeader(section.Title, len(section.Items)),
+				style:     styleSection,
+				itemIndex: -1,
 			})
-			index++
+		}
+		for _, group := range groupBySession(section.Items) {
+			rows = append(rows, displayRow{
+				text:      fmt.Sprintf("%s %s (%d)", sessionMarker, group.Session, len(group.Items)),
+				style:     styleSession,
+				itemIndex: -1,
+			})
+			for _, item := range group.Items {
+				// session 名は見出しに出るので window 行からは外す
+				rows = append(rows, displayRow{
+					text:      fmt.Sprintf("%s %s %s", item.Icon, item.WindowIndex, item.WindowName),
+					itemIndex: index,
+				})
+				index++
+			}
 		}
 	}
 	return rows
+}
+
+// 罫線は ambiguous 幅で端末により長さが変わるため ASCII で囲む (width.go の rule と同じ理由)
+func sectionHeader(title string, count int) string {
+	return fmt.Sprintf("-- %s (%d) --", title, count)
 }
 
 func cursorRow(rows []displayRow, cursor int) int {
@@ -56,10 +72,14 @@ func (m model) layout() (listBudget int, previewBudget int) {
 	if m.filtering || m.query != "" {
 		fixed++
 	}
-	if len(m.visible()) == 0 {
+	// View は「通知なし」か「一致なし」のどちらか 1 行を出す
+	if len(m.items) == 0 || len(m.visible()) == 0 {
 		fixed++
 	}
 	if m.err != nil {
+		fixed++
+	}
+	if m.sectionErr != nil {
 		fixed++
 	}
 	if len(m.preview) > 0 {

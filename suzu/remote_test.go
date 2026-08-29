@@ -73,7 +73,7 @@ func TestSessionLabelAndKeys(t *testing.T) {
 		t.Errorf("見出しの表示名が誤り: %q / %q", local.sessionLabel(), remote.sessionLabel())
 	}
 	// 同じ window ID でも host が違えば別物として追跡する
-	if local.key() == remote.key() || local.paneKey() == remote.paneKey() {
+	if local.key() == remote.key() {
 		t.Error("host をまたいだ同じ ID が同一視されている")
 	}
 }
