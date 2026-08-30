@@ -1,0 +1,7 @@
+{
+  "env": {
+    "AUTO_MERGE": "1",
+    "AUTO_KILL_TMUX_WINDOW": "1"
+  }
+}
+
