@@ -80,6 +80,9 @@ socket_path() { echo "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/$1"; }
 
 cleanup() {
   local socket
+  # 中断時も、この worktree の verify 用バイナリから起動した serve だけを片付ける。
+  # -x でコマンドライン全体を一致させ、別 worktree の serve を巻き込まない。
+  pkill -f -x "$SUZU_BIN serve" 2>/dev/null
   for socket in "$T" "$X" "$OUT" "$STALE" "$BROKEN" "$IN"; do
     tmux -L "$socket" kill-server 2>/dev/null
   done
@@ -775,7 +778,18 @@ for target in $(tmux -L "$IN" show-hooks -g after-set-option 2>/dev/null | grep 
   tmux -L "$IN" set-hook -gu "$target"
 done
 [ "$(doorbell_hook_count)" = 0 ] || fail "serve 検証の前提 (doorbell hook を外す)"
-SUZU_SERVE_ADDR=127.0.0.1:0 SUZU_SERVE_TOKEN="$SERVE_TOKEN" suzu serve >"$SERVE_LOG" 2>&1 &
+(
+  exec env \
+    SUZU_OUTER_SOCKET="$OUT" \
+    SUZU_INNER_TMUX="tmux -L $IN" \
+    SUZU_INNER_TMUX_CMD="tmux -L $IN attach -t test1" \
+    SUZU_DOORBELL_FILE="$DOORBELL" \
+    SUZU_CONFIG_FILE="$CONFIG_FILE" \
+    SUZU_SCRAPE_INTERVAL=1 \
+    SUZU_SERVE_ADDR=127.0.0.1:0 \
+    SUZU_SERVE_TOKEN="$SERVE_TOKEN" \
+    "$SUZU_BIN" serve </dev/null >"$SERVE_LOG" 2>&1
+) &
 SERVE_PID=$!
 wait_for "grep -q 'http://' $SERVE_LOG" \
   && pass "serve が待ち受け URL を表示する" || fail "serve が URL を表示しない ($(cat "$SERVE_LOG"))"
@@ -843,6 +857,9 @@ wait_for "grep -q '\"items\":\[\]' $SERVE_SSE" \
   && pass "通知の解除も SSE で push される" || fail "解除が SSE で届かない"
 kill "$SSE_PID" "$SERVE_PID" 2>/dev/null
 wait "$SSE_PID" "$SERVE_PID" 2>/dev/null
+pgrep -f -x "$SUZU_BIN serve" >/dev/null \
+  && fail "serve の終了後にプロセスが残っている" \
+  || pass "serve の終了後にプロセスが残っていない"
 tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
 sidebar_shows '通知なし' || fail "6d の後片付け"
 
