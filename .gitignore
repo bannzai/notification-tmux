@@ -23,6 +23,7 @@ var/
 
 # Go のビルド成果物
 suzu/bin/
+/suzu/suzu
 
 # macOS
 .DS_Store
