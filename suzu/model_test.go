@@ -229,6 +229,28 @@ func TestCursorSkipsSessionHeaders(t *testing.T) {
 	}
 }
 
+// TestArrowKeysMoveCursorAcrossSessions は矢印キー (↓↑) でも j/k と同じく
+// session 見出しを跨いで window を選択できることを検証する (issue #42)。
+func TestArrowKeysMoveCursorAcrossSessions(t *testing.T) {
+	m := groupedModel()
+	if got := m.selectedPaneID(); got != "%1" {
+		t.Fatalf("初期選択が先頭 window でない: %q", got)
+	}
+	m, _ = pressKeys(m, tea.KeyMsg{Type: tea.KeyDown}, tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.selectedPaneID(); got != "%3" {
+		t.Fatalf("↓ 2 回で別 session の window に入らない: %q", got)
+	}
+	// 末尾で ↓ を押しても溢れない
+	m, _ = pressKeys(m, tea.KeyMsg{Type: tea.KeyDown})
+	if got := m.selectedPaneID(); got != "%3" {
+		t.Errorf("末尾から先へ進んだ: %q", got)
+	}
+	m, _ = pressKeys(m, tea.KeyMsg{Type: tea.KeyUp})
+	if got := m.selectedPaneID(); got != "%2" {
+		t.Errorf("↑ で見出しを跨いで戻れていない: %q", got)
+	}
+}
+
 func TestFilterModeCollectsQuery(t *testing.T) {
 	m := groupedModel()
 	m, _ = pressKeys(m, runesKey("/"))
