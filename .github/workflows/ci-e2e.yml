@@ -90,5 +90,18 @@ jobs:
         run: |
           which tmux
           tmux -V
+      - name: サイドバーのスクリーンショット生成ツールをインストールする
+        if: matrix.tmux.install == 'source'
+        run: go install github.com/charmbracelet/freeze@v0.2.2
       - name: 隔離 socket の E2E (verify.sh) を実行する
+        env:
+          SUZU_SCREENSHOT_DIR: ${{ matrix.tmux.install == 'source' && 'tmp/suzu-screenshots' || '' }}
         run: make verify-cli
+      - name: サイドバーのスクリーンショットを保存する
+        if: ${{ !cancelled() && matrix.tmux.install == 'source' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: suzu-sidebar-screenshots
+          path: tmp/suzu-screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 14
