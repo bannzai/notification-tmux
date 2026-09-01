@@ -172,7 +172,9 @@ capture_sidebar_screenshot() {
     fail "サイドバーの ANSI 描画を取得できない ($name)"
     return 1
   }
-  if freeze "$ansi" --language ansi --width 520 --height 400 --output "$output_dir/$name.png" >"$freeze_log" 2>&1; then
+  # GitHub Actions の shell では stdin が非 TTY のため、freeze はファイル引数より stdin を優先する。
+  # 空の stdin を読んで "No input" にならないよう、ANSI は明示的に stdin へ渡す。
+  if freeze --language ansi --width 520 --height 400 --output "$output_dir/$name.png" <"$ansi" >"$freeze_log" 2>&1; then
     pass "サイドバーのスクリーンショットを生成 ($name.png)"
   else
     freeze_status=$?
