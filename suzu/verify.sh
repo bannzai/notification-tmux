@@ -151,9 +151,10 @@ sidebar_pane() {
 }
 
 capture_sidebar_screenshot() {
-  local name="$1" ansi
+  local name="$1" ansi output_dir freeze_log freeze_status
   [ -n "$SCREENSHOT_DIR" ] || return 0
   ansi="$DOORBELL_DIR/sidebar-$name.ansi"
+  freeze_log="$DOORBELL_DIR/freeze-$name.log"
 
   if ! command -v freeze >/dev/null 2>&1; then
     fail "スクリーンショット生成には freeze が必要"
@@ -163,13 +164,20 @@ capture_sidebar_screenshot() {
     fail "スクリーンショット出力先を作成できない ($SCREENSHOT_DIR)"
     return 1
   }
+  output_dir=$(cd "$SCREENSHOT_DIR" && pwd) || {
+    fail "スクリーンショット出力先を解決できない ($SCREENSHOT_DIR)"
+    return 1
+  }
   tmux -L "$OUT" capture-pane -ep -t "$(sidebar_pane)" >"$ansi" || {
     fail "サイドバーの ANSI 描画を取得できない ($name)"
     return 1
   }
-  freeze "$ansi" --language ansi --width 520 --height 400 --output "$SCREENSHOT_DIR/$name.png" >/dev/null \
-    && pass "サイドバーのスクリーンショットを生成 ($name.png)" \
-    || fail "サイドバーのスクリーンショットを生成できない ($name.png)"
+  if freeze "$ansi" --language ansi --width 520 --height 400 --output "$output_dir/$name.png" >"$freeze_log" 2>&1; then
+    pass "サイドバーのスクリーンショットを生成 ($name.png)"
+  else
+    freeze_status=$?
+    fail "サイドバーのスクリーンショットを生成できない ($name.png, exit $freeze_status: $(cat "$freeze_log"))"
+  fi
 }
 
 # サイドバー pane の描画に pattern が現れるまで待つ

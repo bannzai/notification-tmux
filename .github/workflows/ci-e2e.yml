@@ -61,10 +61,11 @@ jobs:
           key: tmux-${{ env.TMUX_VERSION }}-utf8proc-${{ runner.os }}-${{ runner.arch }}
       - name: tmux をインストールする (公式 tarball からビルド)
         if: matrix.tmux.install == 'source'
-        # 実行時ライブラリはキャッシュの有無に関わらず要るため毎回入れる
+        # 実行時ライブラリはキャッシュの有無に関わらず要るため毎回入れる。
+        # librsvg2-bin の rsvg-convert は freeze が PNG 変換で優先利用する
         run: |
           sudo apt-get update
-          sudo apt-get install -y libevent-dev libncurses-dev libutf8proc-dev bison pkg-config
+          sudo apt-get install -y libevent-dev libncurses-dev libutf8proc-dev bison pkg-config librsvg2-bin
           if [ "${{ steps.tmux-cache.outputs.cache-hit }}" != "true" ]; then
             curl -sSL -o /tmp/tmux.tar.gz "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"
             tar xzf /tmp/tmux.tar.gz -C /tmp
