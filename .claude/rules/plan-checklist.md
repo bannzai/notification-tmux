@@ -25,10 +25,11 @@ Plan mode でプランファイルを作成する際、以下のチェックリ�
 - [ ] 既存コードのパターン・構成を確認し、同じパターンで実装している
 - [ ] 変更範囲が必要最小限であること
 
-### macOS アプリ (Swift / xcodebuild)
-- [ ] `xcodebuild build` が成功する（ログ全文を `./tmp/build.log` に保存し `grep -i -e warning -e error` で全文検査。warning があれば報告に含める）
-- [ ] `xcodebuild test` が全件パスする
-- [ ] XcodeGen (`project.yml`) を変更した場合、`xcodegen generate` を実行して `.xcodeproj` を再生成している
+### suzu (Go)
+- [ ] `gofmt -l suzu` の出力が空である
+- [ ] `make test-cli` (go vet + 単体テスト) が全件パスする（ログ全文を `./tmp/test.log` に保存し `grep -i -e warning -e error -e FAIL` で全文検査する）
+- [ ] 変更に対応する単体テストを追加・更新している
+- [ ] PR で起動した ci-test / ci-e2e の必須 job が green である（完了基準。詳細は E2E.md）。ローカルの手動確認を完了条件に含めない
 
 ### hooks / スクリプト（シェルスクリプトに変更がある場合）
 - [ ] hook スクリプトは冪等である（冪等にできない場合は理由をコメントで明記）
