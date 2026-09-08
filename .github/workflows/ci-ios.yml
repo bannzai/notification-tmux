@@ -1,0 +1,52 @@
+name: CI iOS (SuzuiOS)
+
+# iOS アプリ (SuzuiOS) の単体テストを GitHub Actions の macOS runner 上の iOS Simulator で実行する。
+# ローカルの simulator を完了基準にしないための経路 (E2E.md「iOS アプリ (SuzuiOS)」)
+on:
+  pull_request:
+    paths:
+      - "SuzuiOS/**"
+      - ".github/workflows/ci-ios.yml"
+  push:
+    branches: [main]
+    paths:
+      - "SuzuiOS/**"
+      - ".github/workflows/ci-ios.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: xcodebuild test (iOS Simulator)
+    # SuzuiOS の deployment target が iOS 26 のため、iOS 26 SDK を持つ macos-26 (Xcode 26) を使う
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: 単体テストを実行する (SuzuiOSTests)
+        # runner には署名用の証明書が無いため署名を省く。Simulator は未署名の .app を実行できる
+        run: |
+          mkdir -p tmp
+          xcodebuild -project SuzuiOS/SuzuiOS.xcodeproj -scheme SuzuiOS \
+            -destination 'platform=iOS Simulator,name=iPhone 17' \
+            -derivedDataPath tmp/DerivedData \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            test > tmp/test.log 2>&1 || {
+              echo "テストに失敗。ログ末尾:" >&2
+              tail -n 200 tmp/test.log >&2
+              exit 1
+            }
+          grep -E 'warning:|Test Suite|\*\* TEST' tmp/test.log || true
+      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        if: always()
+        with:
+          name: ios-test-log
+          path: tmp/test.log

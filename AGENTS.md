@@ -7,6 +7,7 @@
 ## 動作確認
 
 - 変更後は必ず [E2E.md](E2E.md) の手順で動作確認すること。ユニットテスト (`make test-cli`) だけで完了としない
+- iOS アプリ (`SuzuiOS/`) の変更は、単体テストを CI (`.github/workflows/ci-ios.yml` の `xcodebuild test`) で、UI の確認を `/ios-simulator` skill を起点にした simtunnel (GitHub Actions macOS runner 上のリモート iOS Simulator。起動 workflow: `.github/workflows/simulator-session.yml`) で行う。ローカル simulator (`sim-boot`) を完了基準にしない。手順とローカルに倒してよい条件は [E2E.md](E2E.md)「iOS アプリ (SuzuiOS)」を参照する
 
 <!-- ai-review-config begin -->
 <!--
