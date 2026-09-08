@@ -32,6 +32,8 @@ CONFIG_FILE="$DOORBELL_DIR/config"
 FAKE_BIN="$DOORBELL_DIR/bin"
 # 端末代役 T の pane 出力 (= 外側 client が実端末へ書く生のバイト列) を pipe-pane で溜める先
 OSC52_LOG="$TMP_DIR/phase2-osc52-$$.log"
+# 指定時だけ代表状態のサイドバーを PNG にする。通常の E2E は freeze に依存させない。
+SCREENSHOT_DIR="${SUZU_SCREENSHOT_DIR:-}"
 FAIL=0
 
 pass() { echo "PASS: $1"; }
@@ -146,6 +148,38 @@ outer_panes() {
 
 sidebar_pane() {
   tmux -L "$OUT" list-panes -t suzu:0 -f '#{@suzu-sidebar}' -F '#{pane_id}' 2>/dev/null | head -1
+}
+
+capture_sidebar_screenshot() {
+  local name="$1" ansi output_dir freeze_log freeze_status
+  [ -n "$SCREENSHOT_DIR" ] || return 0
+  ansi="$DOORBELL_DIR/sidebar-$name.ansi"
+  freeze_log="$DOORBELL_DIR/freeze-$name.log"
+
+  if ! command -v freeze >/dev/null 2>&1; then
+    fail "スクリーンショット生成には freeze が必要"
+    return 1
+  fi
+  mkdir -p "$SCREENSHOT_DIR" || {
+    fail "スクリーンショット出力先を作成できない ($SCREENSHOT_DIR)"
+    return 1
+  }
+  output_dir=$(cd "$SCREENSHOT_DIR" && pwd) || {
+    fail "スクリーンショット出力先を解決できない ($SCREENSHOT_DIR)"
+    return 1
+  }
+  tmux -L "$OUT" capture-pane -ep -t "$(sidebar_pane)" >"$ansi" || {
+    fail "サイドバーの ANSI 描画を取得できない ($name)"
+    return 1
+  }
+  # GitHub Actions の shell では stdin が非 TTY のため、freeze はファイル引数より stdin を優先する。
+  # 空の stdin を読んで "No input" にならないよう、ANSI は明示的に stdin へ渡す。
+  if freeze --language ansi --width 520 --height 400 --output "$output_dir/$name.png" <"$ansi" >"$freeze_log" 2>&1; then
+    pass "サイドバーのスクリーンショットを生成 ($name.png)"
+  else
+    freeze_status=$?
+    fail "サイドバーのスクリーンショットを生成できない ($name.png, exit $freeze_status: $(cat "$freeze_log"))"
+  fi
 }
 
 # サイドバー pane の描画に pattern が現れるまで待つ
@@ -397,6 +431,7 @@ sidebar_shows 'Noroshi 🔔2' && pass "件数表示が 2" || fail "件数表示�
 sidebar_shows 'PREVIEW_TEST2_MARKER' \
   && pass "一覧が更新されても選択中の window (test2) が保たれる" \
   || fail "一覧の更新で選択が別 window へずれた"
+capture_sidebar_screenshot notifications
 
 tmux -L "$T" send-keys -t term:0.0 C-b N
 wait_for "active_pane_is_sidebar" || fail "プレビュー検証のためのフォーカス移動"
@@ -425,6 +460,7 @@ tmux -L "$T" send-keys -l -t term:0.0 '/'
 tmux -L "$T" send-keys -l -t term:0.0 'claude'
 sidebar_shows 'filter: claude_' \
   && pass "/ で入力モードに入りクエリが編集中と分かる" || fail "入力中のクエリが表示されない"
+capture_sidebar_screenshot filter
 
 tmux -L "$T" send-keys -t term:0.0 Enter
 sidebar_hides '▸ test1' \
@@ -512,6 +548,7 @@ wait_for "first_sidebar_line | grep -q '^Noroshi'" \
   && pass "狭い画面でも 1 行目がヘッダー" || fail "ヘッダーが画面外へ押し出されている"
 sidebar_hides '▸ test2' \
   && pass "初期表示には末尾の session が入っていない" || fail "狭い画面なのに全部表示されている"
+capture_sidebar_screenshot scroll
 
 tmux -L "$T" send-keys -t term:0.0 C-b N
 wait_for "active_pane_is_sidebar" || fail "スクロール検証のためのフォーカス移動"
@@ -578,6 +615,7 @@ FAKE_WATCHER=$(tmux -L "$IN" new-window -d -P -F '#{pane_id}' -t test2 -n fake-w
 sidebar_shows '-- Watchers (1) --' \
   && pass "設定ファイルの section (Watchers) がスクリプト名で一致する" || fail "Watchers セクションが出ない"
 sidebar_shows '▶ ' && pass "汎用セクションの行は ▶ で出る" || fail "汎用セクションの行が出ない"
+capture_sidebar_screenshot sections
 
 # セクションの行からもジャンプできる。右 pane の client を test1 に戻してから、
 # フィルタでセクション名を指定して選ぶ
