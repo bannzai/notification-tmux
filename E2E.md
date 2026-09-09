@@ -17,7 +17,7 @@ suzu をビルドして `suzu/verify.sh` を実行する。verify.sh は隔離 s
 - マウス: 実端末が送る SGR シーケンス (`CSI < ボタン ; 列 ; 行 M/m`) を書き込み、サイドバーのクリックでフォーカスが左へ、右 pane のクリックで右へ移ること、右 pane のホイールが内側 tmux に届くこと
 - `suzu serve` (HTTP/SSE): curl を iPhone の代役にして、トークン無しの拒否、通知一覧の取得、`@claude-waiting` の設定・解除が SSE で届くこと、ボタン相当の POST が隔離 tmux にジャンプ・キー送信を行うこと
 
-CI (`.github/workflows/ci-e2e.yml`) でも同じ verify.sh が tmux 3.6a (必須) と 3.4 / Homebrew 最新版 (参考) で走る。
+CI (`.github/workflows/ci-e2e.yml`) でも同じ verify.sh が Linux の tmux 3.6a (必須)、macOS + Homebrew の最新版 (必須。ユーザーの実環境と同じ構成)、Linux の 3.4 (参考) で走る。
 必須の tmux 3.6a では、通知一覧、フィルタ入力中、狭い画面でのスクロール、Claude / Watchers セクションの代表状態を `freeze` で PNG にし、`suzu-sidebar-screenshots` artifact として 14 日間保存する。
 
 `suzu/web/index.html` のブラウザ描画は CI の対象外とする。HTTP/SSE とボタン操作の経路は curl で検証するが、ブラウザ表示の検証が必要になった時は runner 上の headless ブラウザを使う経路を別途検討する。
