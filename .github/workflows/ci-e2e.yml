@@ -61,10 +61,12 @@ jobs:
           key: tmux-${{ env.TMUX_VERSION }}-utf8proc-${{ runner.os }}-${{ runner.arch }}
       - name: tmux をインストールする (公式 tarball からビルド)
         if: matrix.tmux.install == 'source'
-        # 実行時ライブラリはキャッシュの有無に関わらず要るため毎回入れる
+        # 実行時ライブラリはキャッシュの有無に関わらず要るため毎回入れる。
+        # librsvg2-bin の rsvg-convert は freeze が PNG 変換で優先利用する。
+        # Noto は埋め込みフォントに無い日本語・絵文字のフォールバックに使う
         run: |
           sudo apt-get update
-          sudo apt-get install -y libevent-dev libncurses-dev libutf8proc-dev bison pkg-config
+          sudo apt-get install -y libevent-dev libncurses-dev libutf8proc-dev bison pkg-config librsvg2-bin fonts-noto-cjk fonts-noto-color-emoji
           if [ "${{ steps.tmux-cache.outputs.cache-hit }}" != "true" ]; then
             curl -sSL -o /tmp/tmux.tar.gz "https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz"
             tar xzf /tmp/tmux.tar.gz -C /tmp
@@ -90,5 +92,18 @@ jobs:
         run: |
           which tmux
           tmux -V
+      - name: サイドバーのスクリーンショット生成ツールをインストールする
+        if: matrix.tmux.install == 'source'
+        run: go install github.com/charmbracelet/freeze@v0.2.2
       - name: 隔離 socket の E2E (verify.sh) を実行する
+        env:
+          SUZU_SCREENSHOT_DIR: ${{ matrix.tmux.install == 'source' && 'tmp/suzu-screenshots' || '' }}
         run: make verify-cli
+      - name: サイドバーのスクリーンショットを保存する
+        if: ${{ !cancelled() && matrix.tmux.install == 'source' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: suzu-sidebar-screenshots
+          path: tmp/suzu-screenshots/*.png
+          if-no-files-found: warn
+          retention-days: 14
