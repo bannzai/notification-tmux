@@ -45,5 +45,5 @@ verify.sh が検証する対象 (各節の詳細は verify.sh の `=== N. ... ==
 
 次は再現できないのではなく、まだ CI の必須 job に入っていない項目。追加されるまでも完了基準は上記の CI green のままで、ローカルでの代替確認は求めない。
 
-- macOS + Homebrew の tmux での実行: リポジトリが private の間は macOS runner が課金対象になるため、public 化 (#85) の後に macOS job を追加して必須にする (#86)。それまでは Linuxbrew の参考 job が代役
+- macOS + Homebrew の tmux での実行: macOS job の追加と必須化は #86 で行う。それまでは Linuxbrew の参考 job が代役
 - リモート ssh host の経路 (#75 / #80): 機能自体が未マージで main に存在しない。マージ後に runner 上の sshd で verify.sh に追加する (#87)
