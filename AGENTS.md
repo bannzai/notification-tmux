@@ -2,7 +2,7 @@
 
 ## 機能追加
 
-- ユーザーが操作する機能を追加する時は、キー操作をセットで用意すること (issue #29)。サイドバーのキー処理は `suzu/model.go` の `updateKey` / `updateFilterKey` で、フッターの案内 (`footerLines`) も合わせて更新する。内側 tmux から呼ぶ操作は `suzu start` が注入する prefix バインド (`suzu/outer.go`) に追加する。既存のキーと衝突しないことを確認する
+- ユーザーが操作する機能には、既存キーと衝突しないキー操作とフッターの案内を用意する (issue #29)。内側 tmux から呼ぶ操作は `suzu start` が注入する prefix バインドにも用意する
 
 ## 動作確認
 
