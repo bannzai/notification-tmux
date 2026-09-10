@@ -1,10 +1,10 @@
 name: CI E2E (suzu)
 
 # suzu/verify.sh は隔離 socket の tmux だけを使う E2E で数分で終わるため、PR ごとに回す。
-# Linux runner で完結し macOS runner の課金を伴わない
-# pull_request に paths フィルタを付けない: e2e (tmux 3.6a (source)) は ruleset の必須
-# チェックのため、フィルタで起動しない PR (docs のみ等) は必須チェックが永遠に報告されず
-# マージ不能になる。public repo のため runner 課金は増えない
+# public リポジトリのため macOS runner も無料で使える。
+# pull_request に paths フィルタを付けない: e2e (tmux 3.6a (source)) と e2e (tmux latest (brew, macOS))
+# は ruleset の必須チェックのため、フィルタで起動しない PR (docs のみ等) は必須チェックが
+# 永遠に報告されずマージ不能になる
 on:
   pull_request:
   push:
@@ -33,18 +33,18 @@ env:
 jobs:
   e2e:
     name: e2e (tmux ${{ matrix.tmux.label }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.tmux.os }}
     timeout-minutes: 20
-    # 必須なのはユーザー環境と同じ 3.6a。apt の 3.4 (旧版との互換) と Homebrew の最新版
-    # (次に brew upgrade した時に何が壊れるか) は参考 job で、落ちても PR を止めない
+    # 必須なのは Linux で固定した 3.6a と、ユーザーの実環境と同じ macOS + Homebrew の tmux。
+    # apt の 3.4 (旧版との互換) は参考 job で、落ちても PR を止めない
     continue-on-error: ${{ matrix.tmux.reference }}
     strategy:
       fail-fast: false
       matrix:
         tmux:
-          - { label: "3.6a (source)", install: source, reference: false }
-          - { label: "3.4 (apt)", install: apt, reference: true }
-          - { label: "latest (brew)", install: brew, reference: true }
+          - { label: "3.6a (source)", os: ubuntu-latest, install: source, reference: false }
+          - { label: "3.4 (apt)", os: ubuntu-latest, install: apt, reference: true }
+          - { label: "latest (brew, macOS)", os: macos-latest, install: brew, reference: false }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -80,13 +80,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y tmux
-      - name: tmux をインストールする (brew)
+      - name: tmux をインストールする (Homebrew)
         if: matrix.tmux.install == 'brew'
-        # runner の Homebrew は PATH に入っていないため shellenv で通す
-        run: |
-          eval "$(/home/linuxbrew/.linuxbrew/bin/brew shellenv)"
-          brew install tmux
-          echo "$(brew --prefix)/bin" >> "$GITHUB_PATH"
+        run: brew install tmux
       - name: tmux のバージョンを確認する
         run: |
           which tmux
