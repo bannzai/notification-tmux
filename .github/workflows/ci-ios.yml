@@ -1,7 +1,7 @@
 name: CI iOS (SuzuiOS)
 
 # iOS アプリ (SuzuiOS) の単体テストを GitHub Actions の macOS runner 上の iOS Simulator で実行する。
-# ローカルの simulator を完了基準にしないための経路 (E2E.md「iOS アプリ (SuzuiOS)」)
+# ローカルの simulator を完了基準にしないための経路 (E2E.md「CI で何が検証されるか」の ci-ios)
 on:
   pull_request:
     paths:

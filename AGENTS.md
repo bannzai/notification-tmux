@@ -6,8 +6,8 @@
 
 ## 動作確認
 
-- 変更後は必ず [E2E.md](E2E.md) の手順で動作確認すること。ユニットテスト (`make test-cli`) だけで完了としない
-- iOS アプリ (`SuzuiOS/`) の変更は、単体テストを CI (`.github/workflows/ci-ios.yml` の `xcodebuild test`) で、UI の確認を `/ios-simulator` skill を起点にした simtunnel (GitHub Actions macOS runner 上のリモート iOS Simulator。起動 workflow: `.github/workflows/simulator-session.yml`) で行う。ローカル simulator (`sim-boot`) を完了基準にしない。手順とローカルに倒してよい条件は [E2E.md](E2E.md)「iOS アプリ (SuzuiOS)」を参照する
+- 変更後は PR を作成し、その変更で起動した ci-test / ci-e2e の必須 job (`ci-e2e.yml` で `continue-on-error` を付けていない job。現在は Linux の tmux 3.6a と macOS + Homebrew の最新版) が green であることを完了基準にする。ローカルでの手動確認は求めない。CI で何が検証され、何が GHA の対象外かは [E2E.md](E2E.md) を参照する
+- iOS アプリ (`SuzuiOS/`) の変更は、その変更で起動した ci-ios (`xcodebuild test`) が green であることを完了基準にする。画面の確認は `/ios-simulator` skill を起点にした simtunnel で行い、ローカル simulator (`sim-boot`) を完了基準にしない ([E2E.md](E2E.md) の ci-ios と「まだ CI の必須 job に入っていない項目」を参照する)
 
 <!-- ai-review-config begin -->
 <!--

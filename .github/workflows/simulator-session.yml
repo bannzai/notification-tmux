@@ -1,5 +1,5 @@
 # iOS Simulator セッションを張る caller workflow。実体は bannzai/simtunnel の session.yml (reusable workflow)。
-# 参照: https://github.com/bannzai/simtunnel の PROJECT.md「各アプリ repo での実行」、手順は E2E.md「iOS アプリ (SuzuiOS)」
+# 参照: https://github.com/bannzai/simtunnel の PROJECT.md「各アプリ repo での実行」、位置づけは E2E.md「まだ CI の必須 job に入っていない項目」
 name: simulator-session
 # run-name は local/simtunnel CLI が run を特定するキーのためこの形式を維持する
 run-name: "session=${{ inputs.session }} device=${{ inputs.device }}"
