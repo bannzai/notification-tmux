@@ -49,3 +49,15 @@ verify.sh は IME (変換前文字列の描画) を対象外にしているた�
 ## 後片付け
 
 `suzu stop` で外側の session を落とし、内側へ注入したキーバインドと hook を解除する。内側の session・window には触れない。普段使いの端末では `suzu start` を起動時に実行する設定 (Alacritty の `shell` 等) があれば、端末を開き直すだけで復帰する。
+
+## リモート host (issue #75) の実機確認
+
+鍵認証で入れる ssh 先がある場合のみ行う。無い環境では `make verify-cli` (ssh を隔離 socket の tmux へ差し替えた代役での検証) までとし、報告に未検証と明記する。
+
+1. リモート側の準備: リモートの `~/.claude/settings.json` に、ローカルと同じ `@claude-waiting` を set する hook (`tmux set-option -p @claude-waiting "🔔" && tmux set-option -w @claude-waiting "🔔"`) を入れる。suzu 側の hook 注入や socket の転送は不要で、リモートの tmux に option が set されれば control mode の購読で届く。
+2. `~/.config/suzu/config` に `remote-host = <host>` を追記する。remote-host はサイドバーの起動時に読むため、`suzu toggle` を 2 回 (閉じて開く) で読み直させる。
+3. リモートの tmux (Claude Code の hook 相当) で `tmux set-option -p @claude-waiting '🔔'; tmux set-option -w @claude-waiting '🔔'` を実行し、サイドバーに `▸ <host>:<session> (1)` の見出しと window 行が出ること、選択するとリモート pane のプレビューが出ることを確認する。購読は tmux 内部の 1 秒タイマーで評価されるため、反映は最大約 1 秒遅れる。
+4. サイドバーでその通知に Enter し、内側 tmux に `<host>:<session>` という名前の window が開いてリモート session に attach され、右 pane で前面になることを確認する。リモート側でも通知の window がカレントになっていること、もう一度 Enter しても window が増えず既存の window が選ばれることを確認する。
+5. リモートで `tmux set-option -pu @claude-waiting; tmux set-option -wu @claude-waiting` (解除) し、サイドバーから消えることを確認する。
+6. 存在しない host (例: `remote-host = no-such-host`) を追記して読み直し、サイドバーに `no-such-host: 未接続` が出て、ローカルと他の host の一覧が止まらないことを確認する。
+7. 確認後に `remote-host` の追記を戻し、`suzu toggle` を 2 回で読み直す。

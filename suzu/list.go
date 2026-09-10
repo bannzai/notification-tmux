@@ -8,7 +8,7 @@ type sessionGroup struct {
 	Items   []Notification
 }
 
-// session 名・window 名・セクション名への大文字小文字を無視した部分一致で絞り込む。
+// session 名 (リモートは host 付き)・window 名・セクション名への大文字小文字を無視した部分一致で絞り込む。
 // 空クエリは素通しし、一致が無い session は呼び出し側のグループ化で見出しごと消える。
 // セクション名も対象にするのは、"/claude" で Claude セクションだけを残せるようにするため
 func filterNotifications(items []Notification, query string) []Notification {
@@ -18,7 +18,7 @@ func filterNotifications(items []Notification, query string) []Notification {
 	needle := strings.ToLower(query)
 	var matched []Notification
 	for _, item := range items {
-		if strings.Contains(strings.ToLower(item.Session), needle) ||
+		if strings.Contains(strings.ToLower(item.sessionLabel()), needle) ||
 			strings.Contains(strings.ToLower(item.WindowName), needle) ||
 			strings.Contains(strings.ToLower(item.Section), needle) {
 			matched = append(matched, item)
@@ -40,16 +40,19 @@ func splitBySection(items []Notification) []paneSection {
 	return sections
 }
 
-// list-panes の出力順 (= tmux の session 順) を保ったまま session でまとめる
+// list-panes の出力順 (= host の並び → tmux の session 順) を保ったまま session でまとめる。
+// 同名 session が host をまたいで衝突しないよう host と組にしてまとめる。
+// Session は見出しの表示名 (リモートは host:session)
 func groupBySession(items []Notification) []sessionGroup {
 	var groups []sessionGroup
 	at := map[string]int{}
 	for _, item := range items {
-		index, ok := at[item.Session]
+		groupKey := item.Host + fieldSeparator + item.Session
+		index, ok := at[groupKey]
 		if !ok {
 			index = len(groups)
-			at[item.Session] = index
-			groups = append(groups, sessionGroup{Session: item.Session})
+			at[groupKey] = index
+			groups = append(groups, sessionGroup{Session: item.sessionLabel()})
 		}
 		groups[index].Items = append(groups[index].Items, item)
 	}
