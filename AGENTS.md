@@ -6,7 +6,7 @@
 
 ## 動作確認
 
-- 変更後は必ず [E2E.md](E2E.md) の手順で動作確認すること。ユニットテスト (`make test-cli`) だけで完了としない
+- 変更後は PR を作成し、その変更で起動した ci-test / ci-e2e の必須 job (`ci-e2e.yml` で `continue-on-error` を付けていない job。現在は Linux の tmux 3.6a と macOS + Homebrew の最新版) が green であることを完了基準にする。ローカルでの手動確認は求めない。CI で何が検証され、何が GHA の対象外かは [E2E.md](E2E.md) を参照する
 
 <!-- ai-review-config begin -->
 <!--

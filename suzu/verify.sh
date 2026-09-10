@@ -15,7 +15,7 @@
 #
 # 実行: bash suzu/verify.sh
 # 全項目 PASS で exit 0。コピーモード・OSC52・マウスは T への send-keys で再現する (5j / 5k)。
-# IME (変換前文字列の描画) だけは実端末でしか再現できず、ユーザーの手動検証に委ねる。
+# IME (変換前文字列の描画) だけは実端末でしか再現できず、CI の対象外とする (E2E.md)。
 set -u
 
 SUZU_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
