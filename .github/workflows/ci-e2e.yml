@@ -2,12 +2,11 @@ name: CI E2E (suzu)
 
 # suzu/verify.sh は隔離 socket の tmux だけを使う E2E で数分で終わるため、PR ごとに回す。
 # Linux runner で完結し macOS runner の課金を伴わない
+# pull_request に paths フィルタを付けない: e2e (tmux 3.6a (source)) は ruleset の必須
+# チェックのため、フィルタで起動しない PR (docs のみ等) は必須チェックが永遠に報告されず
+# マージ不能になる。public repo のため runner 課金は増えない
 on:
   pull_request:
-    paths:
-      - "suzu/**"
-      - "Makefile"
-      - ".github/workflows/ci-e2e.yml"
   push:
     branches: [main]
     paths:

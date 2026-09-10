@@ -48,6 +48,11 @@ type Config struct {
 	// イベントとして通知しないため、この間隔だけは時間駆動になる。0 で止める
 	ScrapeInterval time.Duration
 	ConfigFile     string
+	// リモート host へ接続する ssh コマンド。検証用に代役へ差し替えられるよう複数語を許す
+	SSHCmd []string
+	// サイドバーが一覧に載せるリモート host (ConfigFile の remote-host、記述順)。
+	// sidebar サブコマンドの起動時に読む (serve はローカルだけを配るため読まない)
+	RemoteHosts []string
 }
 
 // サイドバーのセクション 1 つ分の定義。Process はプロセス名 (実行ファイルやスクリプトの basename)
@@ -83,6 +88,7 @@ func loadConfig() Config {
 		ServeAddr:    envOr("SUZU_SERVE_ADDR", defaultServeAddr),
 		ServeToken:   os.Getenv("SUZU_SERVE_TOKEN"),
 		ConfigFile:   configFile(),
+		SSHCmd:       sshCmd(),
 		// defaultSidebarCmd は exportedEnv() 経由で ScrapeInterval を焼き込むため、
 		// SidebarCmd を組み立てる前に確定させる
 		ScrapeInterval: time.Duration(intEnvOrZero("SUZU_SCRAPE_INTERVAL", int(defaultScrapeInterval/time.Second))) * time.Second,
@@ -155,7 +161,7 @@ func (c Config) defaultSidebarCmd() string {
 // SidebarCmd / InnerAttach は他の設定から既定値を組み立てるため、Config の値を
 // 無条件に焼き込むと引き継ぐたびに入れ子で肥大する (SUZU_SIDEBAR_CMD の既定値は
 // exportedEnv 自身を含む)。ユーザーが明示した時だけ引き継ぐ
-var explicitOnlyEnv = []string{"SUZU_SIDEBAR_CMD", "SUZU_INNER_TMUX_CMD"}
+var explicitOnlyEnv = []string{"SUZU_SIDEBAR_CMD", "SUZU_INNER_TMUX_CMD", "SUZU_SSH_CMD"}
 
 // 子プロセス (サイドバー・注入したキーバインド) へ引き継ぐ設定。
 // tmux の pane やキーバインドは親の環境を継がないため、コマンド行へ焼き込む
@@ -217,6 +223,13 @@ func doorbellFile() string {
 		state = filepath.Join(os.Getenv("HOME"), ".local", "state")
 	}
 	return filepath.Join(state, "suzu", "doorbell")
+}
+
+func sshCmd() []string {
+	if words := strings.Fields(os.Getenv("SUZU_SSH_CMD")); len(words) > 0 {
+		return words
+	}
+	return defaultSSHCmd()
 }
 
 func configFile() string {

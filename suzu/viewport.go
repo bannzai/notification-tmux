@@ -68,9 +68,7 @@ func (m model) layout() (listBudget int, previewBudget int) {
 		return rows, len(m.preview)
 	}
 	fixed := 2 + len(m.footerLines()) // ヘッダー + フッター前の空行 + フッター
-	if !m.connected {
-		fixed++
-	}
+	fixed += len(m.statusLines())
 	if m.filtering || m.query != "" {
 		fixed++
 	}

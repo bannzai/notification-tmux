@@ -1,11 +1,9 @@
 name: CI Test (suzu)
 
+# pull_request に paths フィルタを付けない: test は ruleset の必須チェックのため、
+# フィルタで起動しない PR (docs のみ等) は必須チェックが永遠に報告されずマージ不能になる
 on:
   pull_request:
-    paths:
-      - "suzu/**"
-      - "Makefile"
-      - ".github/workflows/ci-test.yml"
   push:
     branches: [main]
     paths:
