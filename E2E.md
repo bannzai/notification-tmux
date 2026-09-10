@@ -34,6 +34,10 @@ verify.sh が検証する対象 (各節の詳細は verify.sh の `=== N. ... ==
 - 起動経路: tty から `suzu start` すると外側へ attach する、tmux の中からの起動は二重ネストのガードで止まる
 - 壊れた socket からの自己修復: server が死んで socket ファイルだけ残った状態・socket でないファイルで塞がれた状態 (macOS 固有。Linux では tmux 自身が片付ける) からの起動、修復できない時の tmux の stderr と対処ヒントの表示
 
+### ci-ios (`.github/workflows/ci-ios.yml`)
+
+iOS アプリの雛形 `SuzuiOS/SuzuiOS.xcodeproj` (scheme `SuzuiOS`。suzu の通知を iPhone から扱うクライアント) を対象に、macos-26 runner の iOS Simulator (iPhone 17) で `xcodebuild test` を実行し、`SuzuiOSTests` (hosted 単体テスト) が通ること。runner に署名用の証明書が無いため署名は省く。ログは artifact `ios-test-log` に残る。`SuzuiOS/**` と workflow ファイルの変更でだけ起動する (iOS アプリに触れない PR で macOS runner を回さないため) ので、必須チェックにはしていない。
+
 ## GHA で再現できない対象外の項目
 
 次は端末エミュレータやブラウザの側の実装に依存し、GitHub Actions の runner (端末エミュレータも IME も無い) では再現できないため CI の対象外とする。手動確認の手順としては残さない。これらに関係する変更でも、完了基準は上記の CI green で変わらない。
@@ -46,3 +50,4 @@ verify.sh が検証する対象 (各節の詳細は verify.sh の `=== N. ... ==
 次は再現できないのではなく、まだ CI の必須 job に入っていない項目。追加されるまでも完了基準は上記の CI green のままで、ローカルでの代替確認は求めない。
 
 - リモート ssh host の経路 (#75 / #80): verify.sh は ssh を隔離 socket の tmux へ差し替えた代役で検証しており、実 ssh 特有の要素 (ControlMaster の多重化・`-t` の pty 割り当て・リモート tmux の版差) は通っていない。runner 上の sshd で verify.sh に追加する (#87)
+- iOS アプリの画面の確認 (#90): ci-ios は単体テストだけで、画面が描画されることは検証していない。画面の確認・操作・スクリーンショットは `/ios-simulator` skill を起点にした simtunnel (GitHub Actions macOS runner 上のリモート iOS Simulator。caller workflow は `.github/workflows/simulator-session.yml` で `workflow_dispatch` のみ) で行い、ローカル simulator (`sim-boot`) を完了基準にしない。simtunnel を使うには Secrets `TS_OIDC_CLIENT_ID` / `TS_OIDC_AUDIENCE` の登録とリポジトリの OIDC subject の immutable ID 形式への opt-in が要り (未登録の間は起動できない。手順は https://github.com/bannzai/notification-tmux/issues/104 )、ユーザーが手動で dispatch する経路のため CI の必須 job には入れない

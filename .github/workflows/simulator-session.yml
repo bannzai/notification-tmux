@@ -1,0 +1,41 @@
+# iOS Simulator セッションを張る caller workflow。実体は bannzai/simtunnel の session.yml (reusable workflow)。
+# 参照: https://github.com/bannzai/simtunnel の PROJECT.md「各アプリ repo での実行」、位置づけは E2E.md「まだ CI の必須 job に入っていない項目」
+name: simulator-session
+# run-name は local/simtunnel CLI が run を特定するキーのためこの形式を維持する
+run-name: "session=${{ inputs.session }} device=${{ inputs.device }}"
+
+on:
+  workflow_dispatch: # fork PR に Secrets を渡さないため workflow_dispatch のみ
+    # session / device / duration_minutes は local/simtunnel の up が常に送るため宣言必須
+    # (未定義の input を送ると dispatch が拒否される)
+    inputs:
+      session:
+        description: "セッション名。tailnet ホスト名 simtunnel-<session> になる (小文字英数字とハイフンのみ)"
+        required: true
+        default: suzu
+      device:
+        description: "Simulator のデバイス名"
+        required: true
+        default: iPhone 17
+      duration_minutes:
+        description: "セッション維持時間 (分)"
+        required: true
+        default: "60"
+
+jobs:
+  session:
+    # id-token: write が必要なのは reusable workflow を呼ぶこの job だけのため、job 単位で最小権限にする
+    permissions:
+      id-token: write # Tailscale の OIDC (workload identity federation) 認証に必要
+      contents: read
+    # タグ運用はしないため main の commit SHA で固定する (更新時は SHA を書き換える)
+    uses: bannzai/simtunnel/.github/workflows/session.yml@031ba3bb123bbc201205dcd9ecad09d49681392c # main 2026-09-01
+    with:
+      session: ${{ inputs.session }}
+      device: ${{ inputs.device }}
+      duration_minutes: ${{ inputs.duration_minutes }}
+      build_project: SuzuiOS/SuzuiOS.xcodeproj
+      build_scheme: SuzuiOS
+    secrets:
+      TS_OIDC_CLIENT_ID: ${{ secrets.TS_OIDC_CLIENT_ID }}
+      TS_OIDC_AUDIENCE: ${{ secrets.TS_OIDC_AUDIENCE }}
