@@ -134,6 +134,15 @@ suzu 自体は hook スクリプトを持たない。通知の表示・解除は
 | `SUZU_SIDEBAR_CMD` | `<suzu の絶対パス> sidebar` | 左 pane で実行するコマンド |
 | `SUZU_SIDEBAR_WIDTH` | `40` | サイドバーの幅 |
 | `SUZU_DOORBELL_FILE` | `${XDG_STATE_HOME:-$HOME/.local/state}/suzu/doorbell` | `@claude-waiting` の変化をサイドバーへ知らせる touch 先 |
+| `SUZU_SSH_CMD` | `ssh -o BatchMode=yes -o ConnectTimeout=5 -o ControlMaster=auto ...` | リモート host へ接続する ssh コマンド (下記)。検証用に `tmux -L <隔離socket>` を実行する代役へ差し替えられる |
+
+### リモート host (ssh 先) の tmux
+
+`${XDG_CONFIG_HOME:-~/.config}/suzu/config` に `remote-host = <ssh 接続先>` を書くと (複数行で複数 host)、その host の tmux にある `@claude-waiting` の window もサイドバーに `▸ <host>:<session>` の見出しで並ぶ。設定はサイドバーの起動時に読むため、変更後は `suzu toggle` を 2 回 (閉じて開く) で読み直す。
+
+- 一覧は `ssh <host> tmux -u list-panes ...`、更新の受信は host ごとの control mode client (`ssh <host> tmux -C attach`) と `refresh-client -B` の購読で行い、ポーリングはしない。リモート側の Claude Code hook はローカルと同じ `@claude-waiting` を set するだけでよく、suzu 側の hook 注入や socket の転送は要らない
+- Enter で内側 tmux に `ssh -t <host> tmux attach -t <session>` を実行する window (`<host>:<session>`) を開き、既にあればそれを選ぶ
+- 鍵認証 (ssh-agent) で入れること、リモートの非対話 shell の PATH で tmux が見えることが前提。繋がらない host は `<host>: 未接続` と出て、他の一覧は止まらない。`suzu serve` はローカルの通知だけを配る
 
 ## iPhone から通知ボタンで操作する (suzu serve)
 

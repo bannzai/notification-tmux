@@ -29,7 +29,11 @@
 //	SUZU_DOORBELL_FILE     @claude-waiting の変化をサイドバーへ知らせる touch 先
 //	                       (default: ${XDG_STATE_HOME:-$HOME/.local/state}/suzu/doorbell)
 //	SUZU_SCRAPE_INTERVAL   pane 内のプロセスと画面内容を見直す間隔 (秒。default: 5、0 で止める)
-//	SUZU_CONFIG_FILE       設定ファイル (default: ${XDG_CONFIG_HOME:-$HOME/.config}/suzu/config)
+//	SUZU_CONFIG_FILE       設定ファイル (default: ${XDG_CONFIG_HOME:-$HOME/.config}/suzu/config)。
+//	                       section 行と remote-host 行 (リモート host の ssh 接続先。複数行で複数 host) を読む
+//	SUZU_SSH_CMD           リモート host へ接続する ssh コマンド
+//	                       (default: ssh -o BatchMode=yes -o ConnectTimeout=5 -o ControlMaster=auto ...)
+//	                       検証用に "tmux -L <隔離socket>" を実行する代役へ差し替えられる
 //	SUZU_SERVE_ADDR        serve の待ち受けアドレス (default: 127.0.0.1:7788)。
 //	                       iPhone から届かせるには Tailscale の IP を指定する (serve.go)
 //	SUZU_SERVE_TOKEN       serve の認証トークン (default: doorbell と同じディレクトリの serve-token に
@@ -42,6 +46,14 @@
 //
 //	# section = セクション名:プロセス名 (実行ファイルやスクリプトの basename)
 //	section = Watchers:tmux-issue-watcher
+//
+// リモート host (remote.go): 設定ファイルの remote-host に書いた ssh 先の tmux にある
+// @claude-waiting の window もサイドバーへ host 付きで並べ、Enter で内側 tmux にその session への
+// `ssh -t <host> tmux attach` の window を開く。リモート側の Claude Code hook は
+// ローカルと同じ @claude-waiting の set だけでよい (hook・socket の転送は不要)。
+// serve はローカルの通知だけを配り、remote-host は読まない:
+//
+//	remote-host = dev-machine
 package main
 
 import (

@@ -9,6 +9,9 @@
 #   X   = 「普段の端末から内側へ attach しっぱなしの余分な実 client」の代役。
 #         実 client が複数ある状況を作り、ジャンプが右 pane の client だけを
 #         切り替えることを確かめる
+#   R   = リモート host の tmux の代役 (issue #75)。ssh を SUZU_SSH_CMD で
+#         「host "fake" ならこの socket の tmux でコマンドを実行する」スクリプトへ
+#         差し替え、実 ssh 先が無くてもリモート経路を検証する (6e)
 #
 # 実行: bash suzu/verify.sh
 # 全項目 PASS で exit 0。コピーモード・OSC52・マウスは T への send-keys で再現する (5j / 5k)。
@@ -30,6 +33,9 @@ DOORBELL="$DOORBELL_DIR/doorbell"
 # セクションの設定ファイルと、Claude Code / 常駐スクリプトの代役 (プロセス名で一致させる)
 CONFIG_FILE="$DOORBELL_DIR/config"
 FAKE_BIN="$DOORBELL_DIR/bin"
+# リモート host の代役 socket と、ssh の代役 (SUZU_SSH_CMD で差し替える)
+R="szv-remote-$$"
+FAKE_SSH="$DOORBELL_DIR/fake-ssh"
 # 端末代役 T の pane 出力 (= 外側 client が実端末へ書く生のバイト列) を pipe-pane で溜める先
 OSC52_LOG="$TMP_DIR/phase2-osc52-$$.log"
 # 指定時だけ代表状態のサイドバーを PNG にする。通常の E2E は freeze に依存させない。
@@ -85,7 +91,7 @@ cleanup() {
   # 中断時も、この worktree の verify 用バイナリから起動した serve だけを片付ける。
   # -x でコマンドライン全体を一致させ、別 worktree の serve を巻き込まない。
   pkill -f -x "$SUZU_BIN serve" 2>/dev/null
-  for socket in "$T" "$X" "$OUT" "$STALE" "$BROKEN" "$IN"; do
+  for socket in "$T" "$X" "$OUT" "$STALE" "$BROKEN" "$IN" "$R"; do
     tmux -L "$socket" kill-server 2>/dev/null
   done
   # kill-server は socket 経由の命令なので、socket が壊れた server や、server が消えた後も
@@ -94,7 +100,7 @@ cleanup() {
   # tmux プロセスをプロセス一覧から直接落とす (socket 名は $$ 付きで一意)。
   # $$( と書くと bash がコマンド置換として読むため ${$} で参照する
   pkill -f "tmux -L szv-[a-z]+-${$}( |\$)" 2>/dev/null
-  for socket in "$T" "$X" "$OUT" "$STALE" "$BROKEN" "$IN"; do
+  for socket in "$T" "$X" "$OUT" "$STALE" "$BROKEN" "$IN" "$R"; do
     rm -f "$(socket_path "$socket")"
   done
   rm -rf "$DOORBELL_DIR"
@@ -114,7 +120,27 @@ suzu() {
   SUZU_DOORBELL_FILE="$DOORBELL" \
   SUZU_CONFIG_FILE="$CONFIG_FILE" \
   SUZU_SCRAPE_INTERVAL=1 \
+  SUZU_SSH_CMD="$FAKE_SSH" \
     "$SUZU_BIN" "$@" </dev/null
+}
+
+# ssh の代役を書き出す。`ssh [-t] <host> <command...>` を受け、host "fake" なら隔離 socket R の
+# tmux で command を実行する。本物の ssh と同じく command は空白で結合して sh に渡す
+# (suzu が single quote で包んだ引数がそのまま解釈される)。他の host は ssh 自体の失敗 (exit 255)
+write_fake_ssh() {
+  {
+    echo '#!/usr/bin/env bash'
+    echo "REMOTE_SOCKET='$R'"
+    cat <<'FAKE'
+[ "${1:-}" = -t ] && shift
+host="$1"; shift
+case "$host" in
+  fake) exec sh -c "tmux() { command tmux -L '$REMOTE_SOCKET' \"\$@\"; }; $*" ;;
+  *) echo "ssh: connect to host $host port 22: Connection refused" >&2; exit 255 ;;
+esac
+FAKE
+  } > "$FAKE_SSH"
+  chmod +x "$FAKE_SSH"
 }
 
 # cond コマンドが真になるまで最大 50 x 0.2 秒待つ
@@ -266,7 +292,8 @@ FAKE
 cat >"$FAKE_BIN/szv-fake-watcher" <<'FAKE'
 read -r _
 FAKE
-[ -f "$CONFIG_FILE" ] && [ -f "$FAKE_BIN/claude" ] && [ -f "$FAKE_BIN/szv-fake-watcher" ] \
+write_fake_ssh
+[ -f "$CONFIG_FILE" ] && [ -f "$FAKE_BIN/claude" ] && [ -f "$FAKE_BIN/szv-fake-watcher" ] && [ -x "$FAKE_SSH" ] \
   && pass "設定ファイルと代役スクリプトを配置" || fail "設定ファイルと代役スクリプトの配置"
 
 echo "=== 2. 内側 (代役) server を隔離 socket で起動 (test1 / test2) ==="
@@ -901,6 +928,98 @@ pgrep -f -x "$SUZU_BIN serve" >/dev/null \
 tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
 sidebar_shows '通知なし' || fail "6d の後片付け"
 
+echo "=== 6e. リモート host (ssh 代役) の一覧・ジャンプ・通知受信 ==="
+# 実 ssh 先が無い環境でもリモート経路 (remote-host の読み込み・host 付きの一覧・ジャンプ・
+# control mode 購読による更新) を検証する。代役の "fake" は隔離 socket R、"down" は ssh の失敗
+tmux -L "$R" -f /dev/null new-session -d -s rem1 -n remote-work -x 200 -y 50 \
+  'echo REMOTE_PREVIEW_MARKER; exec sh' || fail "リモート (代役) session の起動"
+wait_for "tmux -L $R capture-pane -p -t rem1:0.0 2>/dev/null | grep -q REMOTE_PREVIEW_MARKER" \
+  || fail "リモート (代役) server の起動"
+# section 行と同じ設定ファイルに remote-host を足す (重複は畳まれる)。終わったら元に戻す
+CONFIG_BACKUP="$(cat "$CONFIG_FILE")"
+cat >>"$CONFIG_FILE" <<'CONF'
+remote-host = fake
+remote-host = down
+remote-host = fake
+CONF
+# remote-host はサイドバーの起動時に読むため、閉じて開き直す
+suzu toggle && suzu toggle
+wait_for "[ \"\$(outer_panes)\" = 2 ]" || fail "6e のサイドバー再起動"
+sidebar_shows 'down: 未接続' \
+  && pass "繋がらない host は「host: 未接続」と出る" || fail "繋がらない host の未接続表示が出ない"
+sidebar_shows '通知なし' \
+  && pass "繋がらない host があっても他の表示は止まらない" || fail "未接続 host で表示が止まった"
+sidebar_hides 'fake: 未接続' \
+  && pass "繋がる host は未接続にならない" || fail "繋がる host が未接続と出ている"
+
+tmux -L "$R" set-option -t rem1:0.0 -p @claude-waiting '🔔13:00' || fail "リモートの @claude-waiting の set"
+sidebar_shows '▸ fake:rem1 (1)' \
+  && pass "リモートの通知が host 付きの見出しで出る (control mode 購読の push 経路)" \
+  || fail "リモートの通知が出ない"
+sidebar_shows 'remote-work' && pass "リモートの window 行が出る" || fail "リモートの window 行が出ない"
+sidebar_shows 'REMOTE_PREVIEW_MARKER' \
+  && pass "リモート pane のプレビューが ssh 越しに出る" || fail "リモート pane のプレビューが出ない"
+
+# ローカルの通知と並ぶ時はローカルが先
+sidebar_line_number() {
+  tmux -L "$OUT" capture-pane -p -t "$(sidebar_pane)" 2>/dev/null | grep -n -F -- "$1" | head -1 | cut -d: -f1
+}
+tmux -L "$IN" set-option -t test1:0.0 -p @claude-waiting '🔔13:01' || fail "ローカルの通知 set"
+sidebar_shows 'Noroshi 🔔2' && pass "ローカルとリモートの件数を合算する" || fail "件数が合算されない"
+sidebar_shows '▸ test1' || fail "ローカルの見出し"
+[ "$(sidebar_line_number '▸ test1')" -lt "$(sidebar_line_number '▸ fake:rem1')" ] \
+  && pass "ローカルの見出しがリモートより先に並ぶ" || fail "見出しの並びがローカル → リモートでない"
+tmux -L "$IN" set-option -t test1:0.0 -pu @claude-waiting || fail "ローカルの通知解除"
+sidebar_hides '▸ test1' || fail "ローカルの通知解除の反映"
+
+# Enter: リモート側で通知の window が前面になり、内側 tmux に attach 用 window が開いて前面になる
+tmux -L "$R" new-window -d -t rem1 -n other 'exec sh' || fail "リモートの別 window 作成"
+tmux -L "$R" select-window -t rem1:other || fail "リモートのカレント window を別 window にする"
+remote_window_tag() {
+  tmux -L "$IN" list-windows -a -f "#{==:#{@suzu-remote},$1}" -F '#{window_id}' 2>/dev/null
+}
+remote_real_clients() {
+  tmux -L "$R" list-clients -F '#{client_control_mode}' 2>/dev/null | grep -c '^0$'
+}
+REMOTE_SID=$(tmux -L "$R" display-message -p -t rem1 '#{session_id}')
+wait_for "active_pane_is_sidebar" || fail "6e のフォーカス (toggle で開いた直後はサイドバー)"
+tmux -L "$T" send-keys -t term:0.0 Enter
+wait_for "[ -n \"\$(remote_window_tag 'fake $REMOTE_SID')\" ]" \
+  && pass "Enter で内側 tmux にリモート attach 用の window が開く" || fail "attach 用 window が開かない"
+ATTACH_WINDOW=$(remote_window_tag "fake $REMOTE_SID")
+[ "$(tmux -L "$IN" display-message -p -t "$ATTACH_WINDOW" '#{window_name}' 2>/dev/null)" = 'fake:rem1' ] \
+  && pass "attach 用 window の名前は host:session" || fail "attach 用 window の名前が違う"
+wait_for "[ \"\$(remote_real_clients)\" -ge 1 ]" \
+  && pass "attach 用 window の ssh 代役がリモート session へ attach する" || fail "リモートへ attach しない"
+wait_for "[ \"\$(tmux -L $IN display-message -p -c \"\$(client_name_of_tty $INNER_TTY)\" '#{window_id}')\" = '$ATTACH_WINDOW' ]" \
+  && pass "右 pane の client で attach 用 window が前面になる" || fail "attach 用 window が前面にならない"
+[ "$(tmux -L "$R" display-message -p -t rem1: '#{window_name}')" = remote-work ] \
+  && pass "リモート側でも通知の window が前面になる" || fail "リモートのカレント window が通知の window でない"
+active_pane_is_sidebar \
+  && pass "リモートへのジャンプ後もフォーカスはサイドバーに留まる" || fail "リモートへのジャンプでフォーカスが右へ移った"
+
+tmux -L "$T" send-keys -t term:0.0 Enter
+sleep 1
+[ "$(remote_window_tag "fake $REMOTE_SID" | wc -l | tr -d ' ')" = 1 ] \
+  && pass "既存の attach 用 window があれば増やさず select する" || fail "attach 用 window が増えた"
+
+tmux -L "$R" set-option -t rem1:0.0 -pu @claude-waiting || fail "リモートの @claude-waiting の解除"
+sidebar_shows '通知なし' && pass "リモートの解除も push で届く" || fail "リモートの解除が届かない"
+
+# 後片付け: attach 用 window を閉じ、remote-host を消して開き直すと元の表示に戻る
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "6e 後のフォーカス復帰"
+tmux -L "$IN" kill-window -t "$ATTACH_WINDOW" 2>/dev/null
+tmux -L "$IN" switch-client -c "$(client_name_of_tty "$INNER_TTY")" -t test1
+printf '%s\n' "$CONFIG_BACKUP" >"$CONFIG_FILE"
+suzu toggle && suzu toggle
+wait_for "[ \"\$(outer_panes)\" = 2 ]" || fail "6e 後のサイドバー再起動"
+sidebar_shows '通知なし' || fail "6e 後のサイドバー描画"
+sidebar_hides 'down: 未接続' \
+  && pass "remote-host を消して開き直すとリモート未設定の表示に戻る" || fail "remote-host を消しても未接続表示が残る"
+tmux -L "$T" send-keys -t term:0.0 q
+wait_for "! active_pane_is_sidebar" || fail "6e 後片付け後のフォーカス復帰"
+
 echo "=== 7. stop は自分が入れたものだけを片付ける ==="
 tmux -L "$T" kill-server 2>/dev/null
 # ユーザー自身の bind と after-set-option hook。stop がこれらを巻き込まないこと
@@ -957,7 +1076,7 @@ echo "=== 8. tty から起動した時の attach と二重ネストのガード 
 # 非 tty の start は attach しないため、実端末から使う経路 (exec で tmux へ置き換わる) は
 # ここでしか通らない。$TMUX を外した pane 内で起動して再現する
 start_terminal_stand_in 40 \
-  "env -u TMUX SUZU_OUTER_SOCKET='$OUT' SUZU_INNER_TMUX='tmux -L $IN' SUZU_INNER_TMUX_CMD='tmux -L $IN attach -t test1' SUZU_DOORBELL_FILE='$DOORBELL' SUZU_CONFIG_FILE='$CONFIG_FILE' SUZU_SCRAPE_INTERVAL=1 '$SUZU_BIN' start" \
+  "env -u TMUX SUZU_OUTER_SOCKET='$OUT' SUZU_INNER_TMUX='tmux -L $IN' SUZU_INNER_TMUX_CMD='tmux -L $IN attach -t test1' SUZU_DOORBELL_FILE='$DOORBELL' SUZU_CONFIG_FILE='$CONFIG_FILE' SUZU_SCRAPE_INTERVAL=1 SUZU_SSH_CMD='$FAKE_SSH' '$SUZU_BIN' start" \
   || fail "tty 付き start のための端末代役の起動"
 wait_for "[ \"\$(outer_panes)\" = 2 ]" \
   && pass "tty から start すると額縁が構築される" || fail "tty から start しても額縁ができない"
@@ -984,6 +1103,7 @@ suzu_on_socket() {
   SUZU_DOORBELL_FILE="$DOORBELL" \
   SUZU_CONFIG_FILE="$CONFIG_FILE" \
   SUZU_SCRAPE_INTERVAL=1 \
+  SUZU_SSH_CMD="$FAKE_SSH" \
     "$SUZU_BIN" "$@" </dev/null
 }
 panes_on() { tmux -L "$1" list-panes -t suzu:0 2>/dev/null | wc -l | tr -d ' '; }

@@ -15,6 +15,8 @@ import (
 // JSON タグは serve がブラウザへそのまま配るためのもの (serve が配るのは通知だけなので
 // セクション由来のフィールドは omitempty で落ちる)
 type Notification struct {
+	// 通知が出ている tmux server の host (remote.go)。ローカル (内側 tmux) は空
+	Host string `json:"host,omitempty"`
 	// 属するセクションの名前。通知は空
 	Section string `json:"section,omitempty"`
 	Session string `json:"session"`
@@ -34,9 +36,18 @@ type Notification struct {
 }
 
 // 再取得の前後で同じ行を探し直すための識別子。同じ pane が通知と複数のセクションに
-// 出ることがあるため、pane だけでなくセクションのタイトルと一意識別も含める
+// 出ることがあるため、pane だけでなくセクションのタイトルと一意識別も含める。
+// pane ID は server 内でしか一意でなく host をまたぐと衝突するため host も含める
 func (n Notification) key() string {
-	return n.Section + fieldSeparator + n.SectionKey + fieldSeparator + n.PaneID
+	return n.Host + fieldSeparator + n.Section + fieldSeparator + n.SectionKey + fieldSeparator + n.PaneID
+}
+
+// サイドバーの見出しに出す session の表示名。リモートは host を付けて区別する
+func (n Notification) sessionLabel() string {
+	if n.Host == "" {
+		return n.Session
+	}
+	return n.Host + ":" + n.Session
 }
 
 // 外側 tmux でサイドバーの隣にいる pane。内側 tmux へ attach している右 pane を指す
@@ -276,6 +287,9 @@ func fetchInnerPane(cfg Config) (innerPane, error) {
 // 通知行は window を開く (select-window)。セクション行は加えて select-pane も行う:
 // 検出した Claude/Codex が window の非アクティブ pane にいても、その pane へ到達させる
 func jump(cfg Config, n Notification) error {
+	if n.Host != "" {
+		return jumpRemote(cfg, n)
+	}
 	pane, err := fetchInnerPane(cfg)
 	if err != nil {
 		return err
