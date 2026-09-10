@@ -14,7 +14,7 @@ ci-test / ci-e2e は `pull_request` に `paths` フィルタを付けず全 PR �
 
 `make verify-cli` で `suzu/verify.sh` を実行する。verify.sh は隔離 socket の tmux だけを使い (内側の代役・suzu が構築する外側・端末エミュレータの代役・余分な実 client の 4 つ)、runner の tmux 設定には触れない。全項目 PASS で exit 0。失敗時は最初の失敗時点の状態 (外側 pane・サイドバー画面・内側 session・hook・キー) を標準出力に dump するので、切り分けは CI のログで行う。ログだけで足りない時に限り、手元で `make verify-cli` を実行すると同じ検査を再現できる。
 
-必須 job は `ci-e2e.yml` で `continue-on-error` を付けていない job (ユーザー環境と同じ tmux 3.6a を公式 tarball からビルドしたもの)。apt の 3.4 と Homebrew 最新版は参考 job で、落ちても PR を止めない。必須 job では通知一覧・フィルタ入力中・狭い画面でのスクロール・Claude / Watchers セクションの代表状態を `freeze` で PNG にし、`suzu-sidebar-screenshots` artifact として 14 日間保存する。
+必須 job は `ci-e2e.yml` で `continue-on-error` を付けていない job: Linux の tmux 3.6a (公式 tarball からビルド) と、macOS + Homebrew の最新版 (ユーザーの実環境と同じ構成)。Linux の apt 3.4 は参考 job で、落ちても PR を止めない。Linux の 3.6a job では通知一覧・フィルタ入力中・狭い画面でのスクロール・Claude / Watchers セクションの代表状態を `freeze` で PNG にし、`suzu-sidebar-screenshots` artifact として 14 日間保存する。
 
 verify.sh が検証する対象 (各節の詳細は verify.sh の `=== N. ... ===` 見出しと PASS メッセージを正とする):
 
@@ -45,5 +45,4 @@ verify.sh が検証する対象 (各節の詳細は verify.sh の `=== N. ... ==
 
 次は再現できないのではなく、まだ CI の必須 job に入っていない項目。追加されるまでも完了基準は上記の CI green のままで、ローカルでの代替確認は求めない。
 
-- macOS + Homebrew の tmux での実行: macOS job の追加と必須化は #86 で行う。それまでは Linuxbrew の参考 job が代役
 - リモート ssh host の経路 (#75 / #80): verify.sh は ssh を隔離 socket の tmux へ差し替えた代役で検証しており、実 ssh 特有の要素 (ControlMaster の多重化・`-t` の pty 割り当て・リモート tmux の版差) は通っていない。runner 上の sshd で verify.sh に追加する (#87)
