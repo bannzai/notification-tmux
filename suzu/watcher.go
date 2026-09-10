@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,8 +15,17 @@ import (
 const (
 	debounceInterval = 100 * time.Millisecond
 	reconnectDelay   = time.Second
+	// リモートは ssh の接続が絡むため、落ちている host への再接続の嵐を避けて間隔を空ける
+	remoteReconnectDelay = 5 * time.Second
 	// %output は -f no-output で止めているが、想定外に長い行で読み取りが止まらないよう余裕を持たせる
 	controlLineLimit = 1 << 20
+	// リモートの @claude-waiting の変化を control client で受ける購読 (refresh-client -B)。
+	// 購読の評価対象は attach 中 session に限られるが、format の S: ループは server の
+	// 全 session を回るため、1 本の購読で全 session の pane / window option を追える
+	// (tmux 3.6a で実測)。値が変わるたびに %subscription-changed が届く。
+	// 評価は tmux 内部の 1 秒タイマーで行われるため、反映は最大約 1 秒遅れる。
+	// ローカルは doorbell hook のままで、この購読は使わない
+	waitingSubscription = "suzu::#{S:#{W:#{P:#{pane_id}=#{" + waitingOption + "};}}}"
 )
 
 // 再取得の結果 (notificationsMsg / sectionsMsg / connectionMsg) の届け先。サイドバーでは
@@ -26,7 +36,8 @@ type msgSink interface {
 
 // 内側 tmux の変化を push で受け取り、デバウンスして通知一覧とセクションの再取得を sink へ送る。
 // tmux の構造と @claude-waiting の変化は push だけで拾う。時間駆動は pane 内のプロセスと
-// 画面内容の見直し (ScrapeInterval) だけで、これは tmux がイベントを出さない変化のため
+// 画面内容の見直し (ScrapeInterval) だけで、これは tmux がイベントを出さない変化のため。
+// リモート host (cfg.RemoteHosts) は host ごとに remoteSource として独立に監視する
 type watcher struct {
 	cfg  Config
 	sink msgSink
@@ -47,14 +58,21 @@ func newWatcher(cfg Config, sink msgSink) *watcher {
 }
 
 func (w *watcher) run() {
+	// リモートはトリガもデバウンスも host ごとに持ち、落ちている host の ssh 待ちが
+	// ローカルの再取得を遅らせないようにする
+	for _, host := range w.cfg.RemoteHosts {
+		remote := newRemoteSource(w.cfg, w.sink, host)
+		go remote.watchControlMode()
+		go debounce(remote.triggers, w.sink, remote.fetch)
+	}
 	go w.watchDoorbell()
 	go w.watchControlMode()
 	if w.cfg.ScrapeInterval > 0 {
 		go w.tickScrape()
 	}
 	// セクションの再取得は専用 goroutine に置き、遅い ps が通知の debounce を止めないようにする
-	go w.debounceSections()
-	w.debounce()
+	go debounce(w.sectionTriggers, w.sink, func() tea.Msg { return fetchSectionsMsg(w.cfg) })
+	debounce(w.triggers, w.sink, func() tea.Msg { return fetchNotifications(w.cfg) })
 }
 
 // プロセスの起動・終了 (pane-title-changed hook が拾えない、タイトルを変えないシェル) と
@@ -82,7 +100,8 @@ func send(ch chan struct{}) {
 	}
 }
 
-func (w *watcher) debounce() {
+// triggers が落ち着いてから fetch を 1 回実行し、結果を sink へ送り続ける
+func debounce(triggers <-chan struct{}, sink msgSink, fetch func() tea.Msg) {
 	timer := time.NewTimer(debounceInterval)
 	if !timer.Stop() {
 		<-timer.C
@@ -90,7 +109,7 @@ func (w *watcher) debounce() {
 	armed := false
 	for {
 		select {
-		case <-w.triggers:
+		case <-triggers:
 			if armed && !timer.Stop() {
 				<-timer.C
 			}
@@ -98,30 +117,7 @@ func (w *watcher) debounce() {
 			armed = true
 		case <-timer.C:
 			armed = false
-			w.sink.Send(fetchNotifications(w.cfg))
-		}
-	}
-}
-
-// セクションの再取得を独立してデバウンスする。debounce と同じ仕組みだが、
-// 遅い ps を伴う fetchSectionsMsg を通知の debounce goroutine から切り離すためだけに分ける
-func (w *watcher) debounceSections() {
-	timer := time.NewTimer(debounceInterval)
-	if !timer.Stop() {
-		<-timer.C
-	}
-	armed := false
-	for {
-		select {
-		case <-w.sectionTriggers:
-			if armed && !timer.Stop() {
-				<-timer.C
-			}
-			timer.Reset(debounceInterval)
-			armed = true
-		case <-timer.C:
-			armed = false
-			w.sink.Send(fetchSectionsMsg(w.cfg))
+			sink.Send(fetch())
 		}
 	}
 }
@@ -162,46 +158,80 @@ func (w *watcher) watchDoorbell() {
 // 切断されたら 1 秒待って張り直す
 func (w *watcher) watchControlMode() {
 	for {
-		w.readControlMode()
+		readControlMode(w.cfg.innerCommand("-C", "attach", "-f", "no-output,ignore-size"), "", "", w.sink, w.trigger)
 		w.sink.Send(connectionMsg{connected: false})
 		time.Sleep(reconnectDelay)
 	}
 }
 
-func (w *watcher) readControlMode() {
-	// ignore-size: この control client は監視専用で画面を持たない。付けないと初期寸法が
-	// session のサイズ計算に参加し、実端末の client のレイアウトを縮め得る
-	// (documents/adr/0009)
-	cmd := w.cfg.innerCommand("-C", "attach", "-f", "no-output,ignore-size")
+// control client を起動し、繋がったら connectionMsg を送り、終わるまでツリーイベントを
+// onRefresh へ流す。終わった理由 (cmd.Wait の結果) を返す。
+// subscription が空でなければ接続後に購読を張る (リモートの @claude-waiting 用)。
+// 呼び出し側は attach に -f ignore-size を付ける: この control client は監視専用で画面を持たず、
+// 付けないと初期寸法が session のサイズ計算に参加し、実端末の client のレイアウトを縮め得る
+// (documents/adr/0009)
+func readControlMode(cmd *exec.Cmd, host string, subscription string, sink msgSink, onRefresh func()) error {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return
+		return err
 	}
 	// stdin が即 EOF になると control mode client が終了するため、開いたままの pipe を渡す
 	stdinR, stdinW, err := os.Pipe()
 	if err != nil {
-		return
+		return err
 	}
 	defer stdinW.Close()
 	cmd.Stdin = stdinR
 	if err := cmd.Start(); err != nil {
 		stdinR.Close()
-		return
+		return err
 	}
 	stdinR.Close()
-	w.sink.Send(connectionMsg{connected: true})
+	if subscription != "" {
+		stdinW.WriteString("refresh-client -B " + shellQuote(subscription) + "\n")
+	}
+	sink.Send(connectionMsg{host: host, connected: true})
 	// 切断中に起きた変化はイベントとして再送されないため、接続が成立した時点で
 	// 一覧を取り直す。初回 fetch が内側 server の起動と競合して失敗した場合もここで埋まる
-	w.trigger()
+	onRefresh()
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), controlLineLimit)
 	for scanner.Scan() {
 		if isRefreshEvent(scanner.Text()) {
-			w.trigger()
+			onRefresh()
 		}
 	}
-	cmd.Wait()
+	return cmd.Wait()
+}
+
+// 1 つのリモート host の tmux server を監視する単位 (remote.go)。
+// doorbell hook はリモートに無いため、@claude-waiting の変化は control client の購読で受ける
+type remoteSource struct {
+	cfg      Config
+	sink     msgSink
+	host     string
+	triggers chan struct{}
+}
+
+func newRemoteSource(cfg Config, sink msgSink, host string) *remoteSource {
+	return &remoteSource{cfg: cfg, sink: sink, host: host, triggers: make(chan struct{}, 1)}
+}
+
+func (s *remoteSource) fetch() tea.Msg {
+	return fetchRemoteNotifications(s.cfg, s.host)
+}
+
+// 切断されたら remoteReconnectDelay 待って張り直す
+func (s *remoteSource) watchControlMode() {
+	for {
+		err := readControlMode(s.cfg.remoteCommand(s.host, "-C", "attach", "-f", "no-output,ignore-size"),
+			s.host, waitingSubscription, s.sink, func() { send(s.triggers) })
+		// ssh 自体が失敗した時だけ「未接続」にする。リモートに tmux server が無いだけの時は
+		// 通知が無いのと同じで、host が落ちているとは言わない
+		s.sink.Send(connectionMsg{host: s.host, connected: false, unreachable: isSSHFailure(err)})
+		time.Sleep(remoteReconnectDelay)
+	}
 }
 
 // 通知一覧を取り直す必要がある control mode の通知。
@@ -218,6 +248,7 @@ var refreshEvents = map[string]bool{
 	"%unlinked-window-add":     true,
 	"%unlinked-window-close":   true,
 	"%unlinked-window-renamed": true,
+	"%subscription-changed":    true,
 }
 
 func isRefreshEvent(line string) bool {

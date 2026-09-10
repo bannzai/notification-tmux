@@ -2,7 +2,7 @@
 
 suzu の変更は PR を作成し、その変更で起動した CI の必須 job がすべて green であることを完了基準にする。ローカルでの手動確認 (普段の端末で `suzu start` して目で見る等) は求めない。
 
-CI は `suzu/**`・`Makefile`・各 workflow ファイルの変更で起動する (`paths` フィルタ)。これらに触れない PR (ドキュメントのみ等) では ci-test / ci-e2e は起動せず、起動した job が無いことがそのまま完了基準になる。
+ci-test / ci-e2e は `pull_request` に `paths` フィルタを付けず全 PR で起動する (必須チェックが報告されない PR がマージ不能になるのを防ぐため。#109)。main への `push` 側だけ `suzu/**`・`Makefile`・各 workflow ファイルに限定している。
 
 ## CI で何が検証されるか
 
@@ -46,4 +46,4 @@ verify.sh が検証する対象 (各節の詳細は verify.sh の `=== N. ... ==
 次は再現できないのではなく、まだ CI の必須 job に入っていない項目。追加されるまでも完了基準は上記の CI green のままで、ローカルでの代替確認は求めない。
 
 - macOS + Homebrew の tmux での実行: macOS job の追加と必須化は #86 で行う。それまでは Linuxbrew の参考 job が代役
-- リモート ssh host の経路 (#75 / #80): 機能自体が未マージで main に存在しない。マージ後に runner 上の sshd で verify.sh に追加する (#87)
+- リモート ssh host の経路 (#75 / #80): verify.sh は ssh を隔離 socket の tmux へ差し替えた代役で検証しており、実 ssh 特有の要素 (ControlMaster の多重化・`-t` の pty 割り当て・リモート tmux の版差) は通っていない。runner 上の sshd で verify.sh に追加する (#87)

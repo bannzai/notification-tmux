@@ -91,12 +91,12 @@ func TestPreviewIsDiscardedWhenSelectionMoved(t *testing.T) {
 	m := testModel()
 	m.items = []Notification{{WindowID: "@1", PaneID: "%1"}, {WindowID: "@2", PaneID: "%2"}}
 
-	updated, _ := m.Update(previewMsg{paneID: "%2", lines: []string{"古い選択の結果"}})
+	updated, _ := m.Update(previewMsg{key: m.items[1].key(), lines: []string{"古い選択の結果"}})
 	if got := updated.(model).preview; got != nil {
 		t.Errorf("選択外の pane のプレビューを取り込んでいる: %q", got)
 	}
 
-	updated, _ = m.Update(previewMsg{paneID: "%1", lines: []string{"選択中の結果"}})
+	updated, _ = m.Update(previewMsg{key: m.items[0].key(), lines: []string{"選択中の結果"}})
 	if got := updated.(model).preview; len(got) != 1 || got[0] != "選択中の結果" {
 		t.Errorf("選択中 pane のプレビューが入っていない: %q", got)
 	}
