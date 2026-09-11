@@ -22,7 +22,7 @@ concurrency:
 
 jobs:
   go-install:
-    name: go install (${{ matrix.os }}, GOPROXY=${{ matrix.goproxy }})
+    name: go install (${{ matrix.os }}, ${{ matrix.source }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     strategy:
@@ -30,8 +30,11 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         # proxy.golang.org は @latest の解決結果をキャッシュし、main への push 直後は古い版を返すことがある。
-        # direct は GitHub から直接取得するため、proxy のキャッシュ遅延と切り分けて経路自体の成否を見る
-        goproxy: ["https://proxy.golang.org,direct", "direct"]
+        # direct は suzu の module だけを GONOPROXY で GitHub から直接取得し、proxy のキャッシュ遅延と
+        # 切り分けて経路自体の成否を見る。依存 module まで direct にしない (GOPROXY=direct) のは、
+        # 依存の charmbracelet/x/ansi v0.10.1 が上流で tag を付け直されていて、GitHub から取得すると
+        # sum.golang.org (proxy が記録した元の commit) と checksum が一致せず、suzu 側では直せないため
+        source: [proxy, direct]
     steps:
       # setup-go の go-version-file を読むためだけの checkout。インストール対象は checkout したソースではない
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,7 +47,8 @@ jobs:
           cache: false
       - name: go install で suzu をインストールする
         env:
-          GOPROXY: ${{ matrix.goproxy }}
+          # 空文字は「proxy を除外する module なし」で、既定 (すべて proxy 経由) と同じ
+          GONOPROXY: ${{ matrix.source == 'direct' && 'github.com/bannzai/notification-tmux' || '' }}
         run: go install github.com/bannzai/notification-tmux/suzu@latest
       - name: インストールされたバイナリの module 版と commit を記録する
         run: |

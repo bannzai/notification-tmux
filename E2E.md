@@ -40,7 +40,7 @@ iOS アプリの雛形 `SuzuiOS/SuzuiOS.xcodeproj` (scheme `SuzuiOS`。suzu の�
 
 ### go-install-check (`.github/workflows/go-install-check.yml`)
 
-配布経路 `go install github.com/bannzai/notification-tmux/suzu@latest` が通ること。ubuntu / macOS × GOPROXY (proxy.golang.org / direct) の 4 通りで、checkout したソースではなく proxy / GitHub から取得した module をビルドし、入った `suzu` を `go version -m` で記録して `suzu status` が exit 0 で終わることを確認する。main への push と workflow ファイルの変更で起動し、ruleset の必須チェックには入れていない (main の commit を対象にした確認であり、PR の差分を検証する job ではないため)。
+配布経路 `go install github.com/bannzai/notification-tmux/suzu@latest` が通ること。ubuntu / macOS × 取得元 (proxy.golang.org / suzu の module だけ `GONOPROXY` で GitHub から直接) の 4 通りで、checkout したソースではなく proxy / GitHub から取得した module をビルドし、入った `suzu` を `go version -m` で記録して `suzu status` が exit 0 で終わることを確認する。main への push と workflow ファイルの変更で起動し、ruleset の必須チェックには入れていない (main の commit を対象にした確認であり、PR の差分を検証する job ではないため)。
 
 ## GHA で再現できない対象外の項目
 
