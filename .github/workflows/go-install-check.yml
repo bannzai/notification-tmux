@@ -1,0 +1,59 @@
+name: Go Install Check (suzu)
+
+# 配布経路 `go install github.com/bannzai/notification-tmux/suzu@latest` が実際に通ることを
+# GitHub Actions で確認する (#91)。checkout したソースではなく module proxy / GitHub から取得した
+# module をビルドするため、手元の `make cli` では見えない配布経路の破れ (module path の不一致・
+# proxy に載らない等) を検出する。手元では実行しない (#81)。
+# ruleset の必須チェックではないため、pull_request は本ファイルの変更に限って起動する
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/go-install-check.yml"
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go-install:
+    name: go install (${{ matrix.os }}, ${{ matrix.source }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        # proxy.golang.org は @latest の解決結果をキャッシュし、main への push 直後は古い版を返すことがある。
+        # direct は suzu の module だけを GONOPROXY で GitHub から直接取得し、proxy のキャッシュ遅延と
+        # 切り分けて経路自体の成否を見る。依存 module まで direct にしない (GOPROXY=direct) のは、
+        # 依存の charmbracelet/x/ansi v0.10.1 が上流で tag を付け直されていて、GitHub から取得すると
+        # sum.golang.org (proxy が記録した元の commit) と checksum が一致せず、suzu 側では直せないため
+        source: [proxy, direct]
+    steps:
+      # setup-go の go-version-file を読むためだけの checkout。インストール対象は checkout したソースではない
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: suzu/go.mod
+          # module cache を復元すると proxy / GitHub から取得する経路を通らなくなるため無効にする
+          cache: false
+      - name: go install で suzu をインストールする
+        env:
+          # 空文字は「proxy を除外する module なし」で、既定 (すべて proxy 経由) と同じ
+          GONOPROXY: ${{ matrix.source == 'direct' && 'github.com/bannzai/notification-tmux' || '' }}
+        run: go install github.com/bannzai/notification-tmux/suzu@latest
+      - name: インストールされたバイナリの module 版と commit を記録する
+        run: |
+          go version -m "$(go env GOPATH)/bin/suzu"
+      - name: インストールしたバイナリが起動することを確認する
+        # `suzu --help` は usage を出して exit 64 になるため、tmux が無くても exit 0 で終わる status を使う
+        run: |
+          "$(go env GOPATH)/bin/suzu" status

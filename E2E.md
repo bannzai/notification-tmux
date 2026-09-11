@@ -38,6 +38,10 @@ verify.sh が検証する対象 (各節の詳細は verify.sh の `=== N. ... ==
 
 iOS アプリの雛形 `SuzuiOS/SuzuiOS.xcodeproj` (scheme `SuzuiOS`。suzu の通知を iPhone から扱うクライアント) を対象に、macos-26 runner の iOS Simulator (iPhone 17) で `xcodebuild test` を実行し、`SuzuiOSTests` (hosted 単体テスト) が通ること。runner に署名用の証明書が無いため署名は省く。ログは artifact `ios-test-log` に残る。`SuzuiOS/**` と workflow ファイルの変更でだけ起動する (iOS アプリに触れない PR で macOS runner を回さないため) ので、必須チェックにはしていない。
 
+### go-install-check (`.github/workflows/go-install-check.yml`)
+
+配布経路 `go install github.com/bannzai/notification-tmux/suzu@latest` が通ること。ubuntu / macOS × 取得元 (proxy.golang.org / suzu の module だけ `GONOPROXY` で GitHub から直接) の 4 通りで、checkout したソースではなく proxy / GitHub から取得した module をビルドし、入った `suzu` を `go version -m` で記録して `suzu status` が exit 0 で終わることを確認する。main への push と workflow ファイルの変更で起動し、ruleset の必須チェックには入れていない (main の commit を対象にした確認であり、PR の差分を検証する job ではないため)。
+
 ## GHA で再現できない対象外の項目
 
 次は端末エミュレータやブラウザの側の実装に依存し、GitHub Actions の runner (端末エミュレータも IME も無い) では再現できないため CI の対象外とする。手動確認の手順としては残さない。これらに関係する変更でも、完了基準は上記の CI green で変わらない。
