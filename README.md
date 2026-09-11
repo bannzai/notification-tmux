@@ -31,7 +31,9 @@ go install github.com/bannzai/notification-tmux/suzu@latest
 
 `$(go env GOPATH)/bin` (既定は `~/go/bin`) に `suzu` が入るので、そのディレクトリを PATH に含める。更新も同じコマンドの再実行で行う。この経路が通ることは `.github/workflows/go-install-check.yml` (ubuntu / macOS) で確認している。
 
-リポジトリを clone してソースからビルドする場合は `make cli` で `suzu/bin/suzu` をビルドして `~/.local/bin/suzu` へ配置する (`~/.local/bin` を PATH に含める)。以下の端末設定の例はこちらの配置先で書いている。
+リポジトリを clone してソースからビルドする場合は `make cli` で `suzu/bin/suzu` をビルドして `~/.local/bin/suzu` へ配置する (`~/.local/bin` を PATH に含める)。
+
+以下の端末設定の例は `~/.local/bin/suzu` (`make cli` の配置先) で書いている。`go install` で入れた場合は `~/go/bin/suzu` (`go env GOPATH` が別の場所なら `$(go env GOPATH)/bin/suzu`) に読み替える。
 
 ## 使い方
 
