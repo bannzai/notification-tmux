@@ -150,8 +150,9 @@
   // 「他のキー」を開いたカード (pane_id)。SSE の push で一覧を作り直しても開閉を保つ
   const expanded = new Set();
   let state = { connected: false, keys: [], items: [] };
-  // SSE の接続状態。server が持つ state.connected (内側 tmux への接続) とは別の軸
-  let link = 'live'; // live | reconnecting | failed
+  // SSE の接続状態。server が持つ state.connected (内側 tmux への接続) とは別の軸で、
+  // SSE のイベントだけが書き換える (HTTP の取り直し (refresh) の成否では変えない)
+  let link = 'live'; // live | reconnecting
 
   const el = (tag, cls, text) => {
     const node = document.createElement(tag);
@@ -216,7 +217,6 @@
 
   const renderStatus = () => {
     if (link === 'reconnecting') { status.textContent = '再接続中'; status.className = 'warn'; return; }
-    if (link === 'failed') { status.textContent = '取得失敗'; status.className = 'bad'; return; }
     status.textContent = state.connected ? '内側 tmux 接続中' : '内側 tmux 未接続';
     status.className = state.connected ? '' : 'bad';
   };
@@ -289,7 +289,6 @@
 
   const apply = (next) => {
     state = next;
-    link = 'live';
     render();
   };
 
@@ -299,15 +298,17 @@
       if (res.status === 401) { location.replace('/'); return; }
       apply(await res.json());
     } catch (e) {
-      link = 'failed';
-      renderStatus();
+      showToast('一覧の取得に失敗: ' + e.message);
     }
   };
 
   // 更新は SSE の push で受ける。EventSource はヘッダを付けられないため cookie 認証 (GET のみ) で繋ぐ
   const connect = () => {
     const source = new EventSource('/api/events');
-    source.addEventListener('notifications', (event) => apply(JSON.parse(event.data)));
+    source.addEventListener('notifications', (event) => {
+      link = 'live';
+      apply(JSON.parse(event.data));
+    });
     source.onerror = () => {
       link = 'reconnecting';
       renderStatus();
