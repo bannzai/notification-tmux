@@ -11,49 +11,105 @@
 <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
 <title>suzu</title>
 <style>
+  /* 配色は iOS の system grouped background に寄せる (ホーム画面に追加した web app が OS のアプリと並ぶため)。
+     プレビューだけは両テーマで暗い端末色に固定し、tmux の画面だと分かるようにする */
   :root {
     color-scheme: light dark;
-    --bg: #f6f6f6; --fg: #111; --card: #fff; --muted: #666; --line: #ddd;
-    --accent: #ff5f00; --accent-fg: #fff; --preview-bg: #1e1e1e; --preview-fg: #e6e6e6;
-    --danger: #c62828;
+    --bg: #f2f2f7; --fg: #1c1c1e; --card: #fff; --muted: #6e6e73; --line: #e5e5ea; --chip: #f2f2f7;
+    --accent: #ff5f00; --accent-fg: #fff; --preview-bg: #1c1c1e; --preview-fg: #e6e6e6;
+    --danger: #d62d20; --ok: #2e9e4f; --warn: #d98c00;
   }
   @media (prefers-color-scheme: dark) {
-    :root { --bg: #111; --fg: #eee; --card: #1c1c1c; --muted: #999; --line: #333; --preview-bg: #000; --preview-fg: #ddd; }
+    :root { --bg: #000; --fg: #f2f2f7; --card: #1c1c1e; --muted: #8e8e93; --line: #2c2c2e; --chip: #2c2c2e; --preview-bg: #0b0b0c; --preview-fg: #d6d6d6; --ok: #34c759; --warn: #ffb340; --danger: #ff453a; }
   }
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--bg); color: var(--fg);
     font: 16px/1.4 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
     padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    -webkit-tap-highlight-color: transparent;
   }
   header {
     position: sticky; top: 0; z-index: 1; background: var(--bg);
-    display: flex; align-items: center; justify-content: space-between;
+    display: flex; align-items: center; gap: 10px;
     padding: 12px 16px; border-bottom: 1px solid var(--line);
   }
-  header h1 { margin: 0; font-size: 18px; }
-  #status { font-size: 13px; color: var(--muted); }
+  .brand { display: flex; align-items: center; gap: 10px; flex: 1; min-width: 0; }
+  .mark {
+    width: 32px; height: 32px; border-radius: 9px; background: var(--accent); color: var(--accent-fg);
+    display: grid; place-items: center; font-size: 18px; flex: none;
+  }
+  header h1 { margin: 0; font-size: 20px; line-height: 1.1; letter-spacing: .02em; }
+  .tagline { font-size: 11px; color: var(--muted); line-height: 1.2; }
+  #count {
+    min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; background: var(--accent); color: var(--accent-fg);
+    font-size: 13px; font-weight: 700; display: grid; place-items: center;
+  }
+  #count[hidden] { display: none; }
+  #status {
+    display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); white-space: nowrap;
+  }
+  #status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  #status.warn::before { background: var(--warn); animation: blink 1s ease-in-out infinite; }
   #status.bad { color: var(--danger); }
+  #status.bad::before { background: var(--danger); }
+  @keyframes blink { 50% { opacity: .3; } }
+  #error {
+    margin: 12px 12px 0; padding: 10px 12px; border-radius: 10px; font-size: 13px;
+    background: color-mix(in srgb, var(--danger) 12%, var(--card)); color: var(--danger); border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
+    overflow-wrap: anywhere;
+  }
   main { padding: 12px; }
-  .empty { text-align: center; color: var(--muted); padding: 48px 0; }
-  .session { margin: 16px 0 8px; font-weight: 600; color: var(--muted); font-size: 14px; }
-  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
-  .title { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
-  .title .name { font-weight: 600; font-size: 17px; word-break: break-all; }
-  .title .meta { color: var(--muted); font-size: 13px; }
+  .empty { text-align: center; color: var(--muted); padding: 64px 16px; }
+  .empty .icon { font-size: 44px; line-height: 1; margin-bottom: 12px; filter: grayscale(1); opacity: .6; }
+  .empty .lead { font-size: 17px; font-weight: 600; color: var(--fg); margin-bottom: 4px; }
+  .empty .sub { font-size: 13px; }
+  .session {
+    display: flex; align-items: center; gap: 8px; margin: 18px 4px 8px;
+    font-weight: 600; color: var(--muted); font-size: 13px; text-transform: none;
+  }
+  .session:first-child { margin-top: 4px; }
+  .session::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 12px; margin-bottom: 12px; }
+  .title { display: flex; align-items: center; gap: 8px; }
+  .title .name { font-weight: 600; font-size: 17px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .title .when {
+    flex: none; font-size: 12px; font-weight: 600; color: var(--accent);
+    background: color-mix(in srgb, var(--accent) 14%, var(--card)); padding: 3px 8px; border-radius: 999px;
+  }
+  .meta { margin: 4px 0 10px; color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+  .meta code { font: 11px/1 ui-monospace, Menlo, monospace; background: var(--chip); padding: 3px 5px; border-radius: 5px; color: var(--muted); }
   pre.preview {
-    margin: 0 0 10px; padding: 8px; border-radius: 8px; max-height: 40vh; overflow: auto;
+    margin: 0 0 12px; padding: 10px; border-radius: 10px; overflow: auto; -webkit-overflow-scrolling: touch;
+    /* 10 行 (サイドバーと同じ previewLineCount) が折り返し無しで収まる高さ。それ以上はスクロール */
+    max-height: calc(10 * 1.4 * 12.5px + 20px);
     background: var(--preview-bg); color: var(--preview-fg);
-    font: 12px/1.35 ui-monospace, Menlo, monospace; white-space: pre; -webkit-overflow-scrolling: touch;
+    font: 12.5px/1.4 ui-monospace, Menlo, monospace;
+    /* iPhone の幅では横スクロールより折り返しの方が末尾の質問文を読みやすい */
+    white-space: pre-wrap; overflow-wrap: anywhere;
   }
-  .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  .actions { display: grid; gap: 8px; }
+  .primary { display: grid; grid-template-columns: 1.4fr 1fr 1fr; gap: 8px; }
+  .secondary { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+  .secondary[hidden] { display: none; }
   button {
-    appearance: none; border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--fg);
-    font: inherit; font-weight: 600; min-height: 44px; min-width: 56px; padding: 0 14px; touch-action: manipulation;
+    appearance: none; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--fg);
+    font: inherit; font-weight: 600; min-height: 46px; padding: 0 8px; touch-action: manipulation;
+    position: relative; overflow: hidden;
   }
+  button:active { filter: brightness(.92); }
+  .primary button { background: var(--chip); border-color: transparent; }
   button.jump { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
+  button.more { min-height: 32px; font-size: 12px; font-weight: 500; color: var(--muted); background: transparent; border-color: transparent; justify-self: start; padding: 0 4px; }
   button.armed { background: var(--danger); color: #fff; border-color: var(--danger); }
+  /* 武装の残り時間。左から右へ減るバーで「今タップすれば送る」と「いつ解除されるか」を同時に見せる */
+  button.armed::after {
+    content: ""; position: absolute; left: 0; bottom: 0; height: 4px; background: rgba(255,255,255,.85);
+    width: 100%; transform-origin: left; animation: drain var(--arm-ms) linear forwards; animation-delay: var(--arm-elapsed);
+  }
+  @keyframes drain { from { transform: scaleX(1); } to { transform: scaleX(0); } }
   button:disabled { opacity: .5; }
+  .hint { font-size: 13px; color: var(--danger); font-weight: 600; text-align: center; }
   #toast {
     position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
     background: var(--danger); color: #fff; padding: 12px; border-radius: 10px; display: none; font-size: 14px;
@@ -62,10 +118,18 @@
 </head>
 <body>
 <header>
-  <h1 id="heading">suzu</h1>
-  <div id="status">接続中…</div>
+  <div class="brand">
+    <div class="mark" aria-hidden="true">🔔</div>
+    <div>
+      <h1>suzu</h1>
+      <div class="tagline">Noroshi · tmux の通知</div>
+    </div>
+    <div id="count" hidden></div>
+  </div>
+  <div id="status">接続中</div>
 </header>
-<main id="list"><div class="empty">読み込み中…</div></main>
+<div id="error" hidden></div>
+<main id="list"><div class="empty">読み込み中</div></main>
 <div id="toast"></div>
 <script>
 (() => {
@@ -74,12 +138,21 @@
   const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
   const list = document.getElementById('list');
   const status = document.getElementById('status');
-  const heading = document.getElementById('heading');
+  const count = document.getElementById('count');
+  const errorBanner = document.getElementById('error');
   const toast = document.getElementById('toast');
   // 誤タップ対策: キー送信は 1 回目のタップで「武装」し、3 秒以内の 2 回目で送る
   const ARM_MS = 3000;
-  let armed = null; // { paneId, key, timer }
+  // 常に見せるキー。Claude Code の決定 (Enter) と Codex CLI の承認 (y) が押す頻度の大半を占め、
+  // 残り (拒否・選択肢の番号) は折りたたんでカードを 1 段に収める。表示するのは server が許可した keys の範囲だけ
+  const PRIMARY_KEYS = ['Enter', 'y'];
+  let armed = null; // { paneId, key, at, timer }
+  // 「他のキー」を開いたカード (pane_id)。SSE の push で一覧を作り直しても開閉を保つ
+  const expanded = new Set();
   let state = { connected: false, keys: [], items: [] };
+  // SSE の接続状態。server が持つ state.connected (内側 tmux への接続) とは別の軸で、
+  // SSE のイベントだけが書き換える (HTTP の取り直し (refresh) の成否では変えない)
+  let link = 'live'; // live | reconnecting
 
   const el = (tag, cls, text) => {
     const node = document.createElement(tag);
@@ -109,15 +182,17 @@
     }
   };
 
+  const isArmed = (item, key) => armed && armed.paneId === item.pane_id && armed.key === key;
+
   const onKey = (item, key) => {
-    if (armed && armed.paneId === item.pane_id && armed.key === key) {
+    if (isArmed(item, key)) {
       const chosen = armed;
       disarm();
       post({ action: 'send-keys', pane_id: chosen.paneId, key }).catch((e) => showToast('送信失敗: ' + e.message));
       return;
     }
     if (armed) clearTimeout(armed.timer);
-    armed = { paneId: item.pane_id, key, timer: setTimeout(disarm, ARM_MS) };
+    armed = { paneId: item.pane_id, key, at: Date.now(), timer: setTimeout(disarm, ARM_MS) };
     render();
   };
 
@@ -126,50 +201,94 @@
   };
 
   const keyLabel = (key) => ({ Enter: '⏎ Enter', Escape: 'Esc' }[key] || key);
+  // サイドバーの sessionLabel と同じ。リモートは host を付けて区別する
+  const sessionLabel = (item) => (item.host ? item.host + ':' : '') + item.session;
+
+  const keyButton = (item, key) => {
+    const button = el('button', isArmed(item, key) ? 'armed' : '', keyLabel(key));
+    if (isArmed(item, key)) {
+      button.style.setProperty('--arm-ms', ARM_MS + 'ms');
+      // 一覧を作り直してもバーの残りが実時間とずれないよう、経過分だけ進めた位置から描く
+      button.style.setProperty('--arm-elapsed', -(Date.now() - armed.at) + 'ms');
+    }
+    button.addEventListener('click', () => onKey(item, key));
+    return button;
+  };
+
+  const renderStatus = () => {
+    if (link === 'reconnecting') { status.textContent = '再接続中'; status.className = 'warn'; return; }
+    status.textContent = state.connected ? '内側 tmux 接続中' : '内側 tmux 未接続';
+    status.className = state.connected ? '' : 'bad';
+  };
 
   const render = () => {
-    heading.textContent = state.items.length ? `suzu 🔔${state.items.length}` : 'suzu';
+    renderStatus();
+    count.hidden = !state.items.length;
+    count.textContent = state.items.length;
+    errorBanner.hidden = !state.error;
+    errorBanner.textContent = state.error || '';
     list.replaceChildren();
     if (!state.items.length) {
-      list.append(el('div', 'empty', state.error || '通知なし'));
+      const empty = el('div', 'empty');
+      empty.append(el('div', 'icon', '🔔'));
+      empty.append(el('div', 'lead', '通知なし'));
+      empty.append(el('div', 'sub', 'Claude Code が入力を待つとここに並びます'));
+      list.append(empty);
       return;
     }
     let currentSession = null;
     for (const item of state.items) {
-      if (item.session !== currentSession) {
-        currentSession = item.session;
-        list.append(el('div', 'session', '▸ ' + item.session));
+      if (sessionLabel(item) !== currentSession) {
+        currentSession = sessionLabel(item);
+        list.append(el('div', 'session', currentSession));
       }
       const card = el('div', 'card');
       const title = el('div', 'title');
-      title.append(el('span', 'name', `${item.icon} ${item.window_name}`));
-      title.append(el('span', 'meta', `${item.window_index} ${item.pane_id}`));
+      title.append(el('span', 'name', item.window_name));
+      // @claude-waiting の値 (hooks が書く 🔔HH:MM) をそのまま「いつから待っているか」として出す
+      if (item.icon) title.append(el('span', 'when', item.icon));
       card.append(title);
+      const meta = el('div', 'meta');
+      meta.append(el('span', '', `window ${item.window_index}`));
+      meta.append(el('code', '', item.pane_id));
+      card.append(meta);
       if (item.preview && item.preview.length) {
         const pre = el('pre', 'preview', item.preview.join('\n'));
         card.append(pre);
         // 末尾 (新しい出力) が見えるようにスクロールしておく
         requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
       }
-      const buttons = el('div', 'buttons');
+      const actions = el('div', 'actions');
+      const primary = el('div', 'primary');
       const jump = el('button', 'jump', 'ジャンプ');
       jump.addEventListener('click', () => onJump(item));
-      buttons.append(jump);
-      for (const key of state.keys) {
-        const isArmed = armed && armed.paneId === item.pane_id && armed.key === key;
-        const button = el('button', isArmed ? 'armed' : '', isArmed ? `${keyLabel(key)} を送る?` : keyLabel(key));
-        button.addEventListener('click', () => onKey(item, key));
-        buttons.append(button);
+      primary.append(jump);
+      for (const key of PRIMARY_KEYS.filter((key) => state.keys.includes(key))) primary.append(keyButton(item, key));
+      actions.append(primary);
+      const secondaryKeys = state.keys.filter((key) => !PRIMARY_KEYS.includes(key));
+      if (secondaryKeys.length) {
+        const open = expanded.has(item.pane_id);
+        const more = el('button', 'more', open ? '他のキーを閉じる ▴' : `他のキー (${secondaryKeys.map(keyLabel).join(' ')}) ▾`);
+        more.addEventListener('click', () => {
+          if (open) expanded.delete(item.pane_id); else expanded.add(item.pane_id);
+          render();
+        });
+        actions.append(more);
+        const secondary = el('div', 'secondary');
+        secondary.hidden = !open;
+        for (const key of secondaryKeys) secondary.append(keyButton(item, key));
+        actions.append(secondary);
       }
-      card.append(buttons);
+      if (armed && armed.paneId === item.pane_id) {
+        actions.append(el('div', 'hint', `もう一度タップで ${keyLabel(armed.key)} を送信`));
+      }
+      card.append(actions);
       list.append(card);
     }
   };
 
   const apply = (next) => {
     state = next;
-    status.textContent = next.connected ? '内側 tmux 接続中' : '内側 tmux 未接続';
-    status.className = next.connected ? '' : 'bad';
     render();
   };
 
@@ -179,18 +298,20 @@
       if (res.status === 401) { location.replace('/'); return; }
       apply(await res.json());
     } catch (e) {
-      status.textContent = '取得失敗';
-      status.className = 'bad';
+      showToast('一覧の取得に失敗: ' + e.message);
     }
   };
 
   // 更新は SSE の push で受ける。EventSource はヘッダを付けられないため cookie 認証 (GET のみ) で繋ぐ
   const connect = () => {
     const source = new EventSource('/api/events');
-    source.addEventListener('notifications', (event) => apply(JSON.parse(event.data)));
+    source.addEventListener('notifications', (event) => {
+      link = 'live';
+      apply(JSON.parse(event.data));
+    });
     source.onerror = () => {
-      status.textContent = '再接続中…';
-      status.className = 'bad';
+      link = 'reconnecting';
+      renderStatus();
     };
     return source;
   };
