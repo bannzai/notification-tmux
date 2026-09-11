@@ -21,17 +21,17 @@ Claude Code が Stop すると狼煙が上がり、その狼煙が上がった w
 ## 必要なもの
 
 - tmux 3.3 以降 (`allow-passthrough` を使う)。動作確認済みは 3.6a。CI では 3.4 (apt) と Homebrew 最新版も参考として実行する
-- Go 1.25 以降 (ビルド時のみ)
+- Go 1.25 以降 (`go install` とビルドの時のみ)
 
 ## インストール
 
 ```sh
-make cli
+go install github.com/bannzai/notification-tmux/suzu@latest
 ```
 
-`suzu/bin/suzu` をビルドして `~/.local/bin/suzu` へ配置する (`~/.local/bin` を PATH に含める)。更新も `make cli` の再実行で行う。
+`$(go env GOPATH)/bin` (既定は `~/go/bin`) に `suzu` が入るので、そのディレクトリを PATH に含める。更新も同じコマンドの再実行で行う。この経路が通ることは `.github/workflows/go-install-check.yml` (ubuntu / macOS) で確認している。
 
-リポジトリの public 化後は `go install github.com/bannzai/notification-tmux/suzu@latest` を配布経路にする予定 (issue #76 の後で扱う。現状は private のため未提供)。
+リポジトリを clone してソースからビルドする場合は `make cli` で `suzu/bin/suzu` をビルドして `~/.local/bin/suzu` へ配置する (`~/.local/bin` を PATH に含める)。以下の端末設定の例はこちらの配置先で書いている。
 
 ## 使い方
 
