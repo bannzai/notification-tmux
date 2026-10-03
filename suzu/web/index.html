@@ -133,9 +133,9 @@
 <div id="toast"></div>
 <script>
 (() => {
-  // 認証トークンは /?token= で受け取った cookie にある。POST は Authorization ヘッダでしか通らない
-  const token = (document.cookie.match(/(?:^|; )suzu_token=([^;]*)/) || [])[1] || '';
-  const headers = { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' };
+  // 認証トークンは /?token= で受け取った HttpOnly の cookie にあり、fetch が自動で送る。
+  // POST は cookie に加えて X-Suzu-Request ヘッダが無いと通らない
+  const headers = { 'X-Suzu-Request': '1', 'Content-Type': 'application/json' };
   const list = document.getElementById('list');
   const status = document.getElementById('status');
   const count = document.getElementById('count');
