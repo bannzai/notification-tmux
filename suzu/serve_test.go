@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -127,6 +128,10 @@ func TestServeRequiresToken(t *testing.T) {
 		{"cookie での GET API", request("GET", "/api/notifications", "", map[string]string{"Cookie": tokenCookieName + "=" + testToken}), 200, "claude-work"},
 		// cookie だけでは状態を変えられない (別 origin からの POST に cookie が乗っても弾く)
 		{"cookie だけの POST", request("POST", "/api/actions", `{"action":"jump","pane_id":"%7"}`, map[string]string{"Cookie": tokenCookieName + "=" + testToken}), 401, "token が必要"},
+		// 画面の JS は HttpOnly の cookie を読めないため、cookie とカスタムヘッダで POST する
+		{"cookie とカスタムヘッダの POST", request("POST", "/api/actions", `{"action":"jump","pane_id":"%7"}`, map[string]string{"Cookie": tokenCookieName + "=" + testToken, browserRequestHeader: "1"}), 200, ""},
+		{"カスタムヘッダと違う token の cookie の POST", request("POST", "/api/actions", `{"action":"jump","pane_id":"%7"}`, map[string]string{"Cookie": tokenCookieName + "=wrong", browserRequestHeader: "1"}), 401, "token が必要"},
+		{"cookie 無しのカスタムヘッダだけの POST", request("POST", "/api/actions", `{"action":"jump","pane_id":"%7"}`, map[string]string{browserRequestHeader: "1"}), 401, "token が必要"},
 		{"違う token の cookie", request("GET", "/api/notifications", "", map[string]string{"Cookie": tokenCookieName + "=wrong"}), 401, "token が必要"},
 	} {
 		rec := httptest.NewRecorder()
@@ -145,8 +150,20 @@ func TestServeTokenQueryMovesTokenToCookie(t *testing.T) {
 		t.Fatalf("/ へリダイレクトしていない: status=%d location=%q", rec.Code, rec.Header().Get("Location"))
 	}
 	cookie := rec.Header().Get("Set-Cookie")
-	if !strings.Contains(cookie, tokenCookieName+"="+testToken) || !strings.Contains(cookie, "SameSite=Strict") {
+	if !strings.Contains(cookie, tokenCookieName+"="+testToken) || !strings.Contains(cookie, "SameSite=Strict") || !strings.Contains(cookie, "HttpOnly") {
 		t.Errorf("cookie が想定どおりでない: %q", cookie)
+	}
+	// 平文 HTTP で Secure を付けるとブラウザが cookie を保存しない
+	if strings.Contains(cookie, "Secure") {
+		t.Errorf("平文 HTTP の cookie に Secure が付いている: %q", cookie)
+	}
+
+	rec = httptest.NewRecorder()
+	tlsRequest := request("GET", "/?token="+testToken, "", nil)
+	tlsRequest.TLS = &tls.ConnectionState{}
+	s.handler().ServeHTTP(rec, tlsRequest)
+	if cookie := rec.Header().Get("Set-Cookie"); !strings.Contains(cookie, "Secure") {
+		t.Errorf("TLS で受けた cookie に Secure が付いていない: %q", cookie)
 	}
 
 	rec = httptest.NewRecorder()

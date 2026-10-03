@@ -878,7 +878,13 @@ curl -s -b "$SERVE_COOKIE" "$SERVE_URL/" | grep -q '<title>suzu</title>' \
   && pass "cookie で画面 (index.html) が出る" || fail "cookie で画面が出ない"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -b "$SERVE_COOKIE" -X POST -H 'Content-Type: application/json' \
     -d '{"action":"jump","pane_id":"%0"}' "$SERVE_URL/api/actions")" = 401 ] \
-  && pass "cookie だけの POST は 401 (Authorization ヘッダ必須)" || fail "cookie だけで POST が通る"
+  && pass "cookie だけの POST は 401 (Authorization か X-Suzu-Request ヘッダ必須)" || fail "cookie だけで POST が通る"
+# curl の cookie jar は HttpOnly の cookie を #HttpOnly_ 付きの行で書く
+grep -q "^#HttpOnly_.*suzu_token" "$SERVE_COOKIE" && pass "cookie が HttpOnly" || fail "cookie が HttpOnly でない"
+# 画面と同じ cookie + X-Suzu-Request の POST は認証を通る (通知に無い pane なので 404)
+[ "$(curl -s -o /dev/null -w '%{http_code}' -b "$SERVE_COOKIE" -X POST -H 'Content-Type: application/json' -H 'X-Suzu-Request: 1' \
+    -d '{"action":"jump","pane_id":"%9999"}' "$SERVE_URL/api/actions")" = 404 ] \
+  && pass "cookie + X-Suzu-Request の POST は認証を通る" || fail "cookie + X-Suzu-Request の POST が認証で弾かれる"
 
 # SSE を張ってから通知を出し、push で届くことを見る
 curl -s -N -b "$SERVE_COOKIE" "$SERVE_URL/api/events" >"$SERVE_SSE" 2>&1 &

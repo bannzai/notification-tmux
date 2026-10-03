@@ -31,10 +31,10 @@ import (
 // 認証と誤操作対策 (send-keys は任意の入力を流せるため、最初から絞る):
 //
 //   - 全エンドポイントを Bearer トークンで守る。トークンは SUZU_SERVE_TOKEN か起動時に生成し、
-//     初回だけ /?token=<token> で受け取って cookie (SameSite=Strict) に保存する。
-//     状態を変える POST は cookie では通さず Authorization ヘッダだけを受ける。
-//     カスタムヘッダは別 origin のページから preflight なしに付けられないため、
-//     LAN 内の別サイトから cookie 頼みで POST を撃ち込まれる経路を塞ぐ
+//     初回だけ /?token=<token> で受け取って cookie (SameSite=Strict・HttpOnly) に保存する。
+//     状態を変える POST は cookie だけでは通さず、Authorization ヘッダか、cookie に加えて
+//     browserRequestHeader を求める。カスタムヘッダは別 origin のページから preflight なしに
+//     付けられないため、LAN 内の別サイトから cookie 頼みで POST を撃ち込まれる経路を塞ぐ
 //   - 送れるキーは allowedKeys の固定ホワイトリストだけ。任意文字列は受けない
 //   - 対象 pane は「今の通知一覧に載っている pane」だけ。通知の無い pane へは送れない
 //   - 到達性は Tailscale 等の閉じた網を前提にし、既定の bind は localhost。公開サーバーは立てない
@@ -52,6 +52,9 @@ const (
 	// 開発サーバの既定 (3000 / 8000 / 8080 等) を避けた値で、衝突時は SUZU_SERVE_ADDR で変える
 	defaultServeAddr = "127.0.0.1:7788"
 	tokenCookieName  = "suzu_token"
+	// ブラウザの画面が状態を変える要求に付けるカスタムヘッダ。cookie は HttpOnly で
+	// 画面の JS からトークンを読めないため、Authorization の代わりにこれで同一 origin を示す
+	browserRequestHeader = "X-Suzu-Request"
 	// cookie の寿命。iPhone で /?token= を開き直す手間を減らすため長めに取り、
 	// トークンを変えた時 (serve の再起動) は cookie が残っていても 401 で弾かれる
 	tokenCookieMaxAge = 365 * 24 * time.Hour
@@ -330,13 +333,13 @@ func (s *server) tokenMatches(candidate string) bool {
 	return candidate != "" && subtle.ConstantTimeCompare([]byte(candidate), []byte(s.token)) == 1
 }
 
-// GET は cookie でも通す (EventSource はヘッダを付けられない)。
-// 状態を変える POST は Authorization ヘッダだけを受ける (先頭コメント参照)
+// GET は cookie だけでも通す (EventSource はヘッダを付けられない)。
+// 状態を変える POST は cookie に加えて browserRequestHeader を求める (先頭コメント参照)
 func (s *server) authorized(r *http.Request) bool {
 	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
 		return s.tokenMatches(strings.TrimPrefix(auth, "Bearer "))
 	}
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get(browserRequestHeader) == "" {
 		return false
 	}
 	cookie, err := r.Cookie(tokenCookieName)
@@ -372,6 +375,11 @@ func (s *server) handleIndex(w http.ResponseWriter, r *http.Request) {
 			Name:     tokenCookieName,
 			Value:    token,
 			Path:     "/",
+			HttpOnly: true,
+			// serve 自身は平文 HTTP で待ち受け、iPhone は http://<Tailscale の IP> で開く。
+			// ブラウザは localhost 以外の http から Secure 付きの cookie を保存しないため、
+			// TLS で受けた時だけ付ける
+			Secure:   r.TLS != nil,
 			SameSite: http.SameSiteStrictMode,
 			MaxAge:   int(tokenCookieMaxAge.Seconds()),
 		})
