@@ -21,3 +21,10 @@ verify-cli: build-cli
 
 clean:
 	rm -rf $(SUZU_DIR)/bin
+
+# 引数なしの make で動作確認 (verify) を実行する
+.DEFAULT_GOAL := verify
+
+.PHONY: verify
+verify: test-cli verify-cli
+	unformatted="$$(gofmt -l $(SUZU_DIR))" || { echo "gofmt の実行に失敗しました"; exit 1; }; test -z "$$unformatted" || { echo "$$unformatted"; echo "gofmt で整形されていないファイルがあります"; exit 1; }
