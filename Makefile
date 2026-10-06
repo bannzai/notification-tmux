@@ -27,4 +27,4 @@ clean:
 
 .PHONY: verify
 verify: test-cli verify-cli
-	unformatted="$$(gofmt -l $(SUZU_DIR))"; test -z "$$unformatted" || { echo "$$unformatted"; echo "gofmt で整形されていないファイルがあります"; exit 1; }
+	unformatted="$$(gofmt -l $(SUZU_DIR))" || { echo "gofmt の実行に失敗しました"; exit 1; }; test -z "$$unformatted" || { echo "$$unformatted"; echo "gofmt で整形されていないファイルがあります"; exit 1; }
