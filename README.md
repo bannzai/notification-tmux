@@ -168,10 +168,11 @@ SUZU_SERVE_ADDR=$(tailscale ip -4):7788 suzu serve
 ## 開発
 
 ```sh
-make              # 引数なしは verify を実行する (test-cli + verify-cli + gofmt の差分が無いことの確認。CI と同じ検査)
+make              # 引数なしは cli を実行する (ビルドして ~/.local/bin へ配置する。手で動作確認するための入口で、検査・テストは含めず CI が行う)
 make build-cli    # suzu/bin/suzu をビルドする
 make test-cli     # go vet + go test
 make verify-cli   # 隔離 socket の tmux だけを使う E2E (suzu/verify.sh)。普段の tmux には触れない
+make verify       # test-cli + verify-cli + gofmt の差分が無いことの確認 (CI と同じ検査)
 make cli          # ビルドして ~/.local/bin へ配置する
 make clean        # ビルド成果物を消す
 ```
