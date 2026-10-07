@@ -6,7 +6,7 @@ require (
 	github.com/charmbracelet/bubbletea v1.3.10
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/mattn/go-isatty v0.0.24
-	github.com/mattn/go-runewidth v0.0.29
+	github.com/mattn/go-runewidth v0.0.30
 )
 
 require (
